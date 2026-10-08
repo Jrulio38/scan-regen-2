@@ -1,0 +1,966 @@
+name: "scan-regen"
+title: "Scan & Régénère — Lecteur / Générateur de codes-barres"
+type: "text/html"
+---
+
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Scan &amp; Régénère 2</title>
+<meta name="theme-color" content="#0f172a" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Scan &amp; Régénère 2" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<style>
+  :root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f172a; color:#e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; max-width:680px; margin-inline:auto; }
+  h1 { font-size:1.3rem; margin:4px 0 2px; }
+  .sub { color:#94a3b8; font-size:.85rem; margin-bottom:14px; }
+  .card { background:#1e293b; border-radius:14px; padding:16px; margin-bottom:14px; }
+  button { background:#2563eb; color:#fff; border:none; border-radius:10px; padding:12px 18px; font-size:1rem; font-weight:600; cursor:pointer; width:100%; }
+  button.sec { background:#334155; margin-top:8px; }
+  button.active { outline:3px solid #38bdf8; }
+  .switchRow { display:flex; align-items:center; justify-content:center; gap:12px; margin-top:10px; flex-wrap:wrap; }
+  .swLbl { font-size:.9rem; color:#94a3b8; }
+  #lblPhoto.actif { color:#4ade80; font-weight:700; }
+  #lblVollee.actif { color:#f87171; font-weight:700; }
+  .switch { position:relative; display:inline-block; width:54px; height:28px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; cursor:pointer; inset:0; background:#dc2626; border-radius:28px; transition:.2s; }
+  .slider:before { content:""; position:absolute; height:22px; width:22px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider { background:#16a34a; }
+  .switch input:not(:checked) + .slider:before { transform:translateX(26px); }
+  video { width:100%; border-radius:12px; background:#000; display:block; }
+  #result { display:none; }
+  input[type=text] { width:100%; padding:12px; border-radius:10px; border:1px solid #475569; background:#0f172a; color:#e2e8f0; font-size:1.1rem; letter-spacing:1px; }
+  select { width:100%; padding:10px; border-radius:10px; background:#0f172a; color:#e2e8f0; border:1px solid #475569; font-size:1rem; margin-top:8px; }
+  .val { font-size:1.4rem; font-weight:700; word-break:break-all; text-align:center; margin:10px 0; color:#4ade80; }
+  .err { color:#f87171; font-weight:600; }
+  #output { text-align:center; padding:10px 0; }
+  #output svg { max-width:100%; height:auto; background:#fff; border-radius:8px; padding:8px; }
+  .tabs { display:flex; gap:8px; margin-top:10px; }
+  .tabs button { background:#334155; }
+  .tabs button.active { background:#2563eb; }
+  ul { list-style:none; padding:0; margin:0; }
+  li { display:flex; justify-content:space-between; gap:8px; padding:8px 4px; border-bottom:1px solid #334155; font-size:.95rem; }
+  li .fmt { color:#94a3b8; font-size:.8rem; }
+  li button { width:auto; background:#334155; padding:6px 10px; font-size:.8rem; }
+  .hint { color:#94a3b8; font-size:.85rem; margin-top:8px; }
+  #printArea { display:none; }
+  #fsOverlay { position:fixed; inset:0; background:#fff; z-index:99; display:flex; align-items:center; justify-content:center; flex-direction:column; }
+  #fsOverlay svg { max-width:96vw; max-height:80vh; width:auto; height:auto; }
+  #fsOverlay .close { margin-top:14px; }
+  @media print {
+    body > *:not(#printArea) { display:none !important; }
+    body { background:#fff; color:#000; max-width:none; padding:0; }
+    #printArea { display:block; text-align:center; }
+    #printArea svg { width:90%; max-width:700px; height:auto; }
+    #printArea .plabel { font-size:14pt; font-weight:700; letter-spacing:1px; margin:6mm 0 3mm; word-break:break-all; }
+    #printArea .ptitle { font-size:11pt; color:#555; margin:0 0 8mm; }
+  }
+</style>
+</head>
+<body>
+  <h1>📷 Scan &amp; Régénère 2</h1>
+  <div class="sub">Scanne un code illisible avec la caméra, il est régénéré en QR code ou code-barres propre. Fonctionne hors-ligne pour la génération.</div>
+
+  <div class="card" id="scanCard">
+    <video id="video" playsinline muted></video>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button id="startBtn">▶︎ Démarrer la caméra</button>
+    </div>
+    <div class="switchRow">
+      <span class="swLbl" id="lblPhoto">📸 Photo unique</span>
+      <label class="switch"><input type="checkbox" id="modeSwitch" checked /><span class="slider"></span></label>
+      <span class="swLbl" id="lblVollee">⚡ Scan à la volée</span>
+    </div>
+    <button class="sec" id="photoBtn">🖼️ Scanner depuis une photo</button>
+    <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
+    <canvas id="zxCanvas" style="display:none"></canvas>
+    <div id="scanStatus" class="hint">Visez le code-barres, la détection est automatique.</div>
+    <div id="libStatus" class="hint"></div>
+  </div>
+
+  <div class="card" id="genCard">
+    <div style="font-weight:700;margin-bottom:6px">✍️ Générer un code depuis un texte</div>
+    <input type="text" id="genInput" placeholder="Tapez ici votre texte, URL ou code…" />
+    <button id="genQrBtn">⚡ Générer un QR Code</button>
+    <button class="sec" id="genBcBtn">⊢ Générer un code-barres (Code 128)</button>
+    <div class="hint">QR Code : tout texte (URL, Wi-Fi, texte libre). Code 128 : chiffres et lettres simples. Tout code généré est conservé jusqu'à « Tout effacer ».</div>
+  </div>
+
+  <div class="card" id="result">
+    <div style="text-align:right"><button class="sec" id="closeBtn" style="width:auto;padding:6px 12px">✕</button></div>
+    <div class="hint">Code détecté :</div>
+    <div class="val" id="val"></div>
+    <input type="text" id="editVal" placeholder="…ou saisissez un code à la main" />
+    <button class="sec" id="applyBtn">↻ Régénérer avec cette valeur</button>
+
+    <div class="tabs">
+      <button id="tabQr" class="active">QR Code</button>
+      <button id="tabBc">Code-barres</button>
+    </div>
+    <select id="bcFormat">
+      <option value="CODE128">Code 128 (le plus universel)</option>
+      <option value="EAN13">EAN-13</option>
+      <option value="EAN8">EAN-8</option>
+      <option value="UPC">UPC-A</option>
+      <option value="CODE39">Code 39</option>
+      <option value="ITF14">ITF-14</option>
+    </select>
+    <div id="output"></div>
+    <button id="fullBtn">⤢ Afficher en plein écran</button>
+    <button class="sec" id="pngBtn">💾 Télécharger en image (PNG)</button>
+    <button class="sec" id="printBtn">🖨️ Imprimer / PDF</button>
+    <button class="sec" id="clearBtn">🗑️ Effacer ce code et le texte</button>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:6px">🕘 Derniers codes</div>
+    <ul id="history"></ul>
+    <div class="hint" id="emptyHist">Aucun code pour l'instant.</div>
+    <div class="hint" style="margin-top:8px">🔒 Confidentialité : vos codes restent enregistrés uniquement sur cet appareil — jamais envoyés sur Internet — pour ne rien perdre en cas de fermeture accidentelle. « Tout effacer » supprime tout immédiatement.</div>
+    <button class="sec" id="wipeBtn" style="margin-top:8px">🧹 Tout effacer</button>
+  </div>
+
+  <div id="printArea">
+    <div class="plabel" id="printVal"></div>
+    <div id="printCode"></div>
+    <div class="ptitle" id="printTitle"></div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+(function () {
+  var video = document.getElementById('video');
+  var startBtn = document.getElementById('startBtn');
+  var photoBtn = document.getElementById('photoBtn');
+  var photoInput = document.getElementById('photoInput');
+  var statusEl = document.getElementById('scanStatus');
+  var resultEl = document.getElementById('result');
+  var valEl = document.getElementById('val');
+  var editVal = document.getElementById('editVal');
+  var applyBtn = document.getElementById('applyBtn');
+  var output = document.getElementById('output');
+  var tabQr = document.getElementById('tabQr');
+  var tabBc = document.getElementById('tabBc');
+  var bcFormat = document.getElementById('bcFormat');
+  var fullBtn = document.getElementById('fullBtn');
+  var pngBtn = document.getElementById('pngBtn');
+  var printBtn = document.getElementById('printBtn');
+  var historyEl = document.getElementById('history');
+  var emptyHist = document.getElementById('emptyHist');
+  var closeBtn = document.getElementById('closeBtn');
+
+  var stream = null, rafId = null, detector = null, running = false;
+  var mode = 'qr', lastResult = null, lastVal = null, cooldown = 0;
+  var hist = [];
+  var modeSwitch = document.getElementById('modeSwitch');
+  var lblPhoto = document.getElementById('lblPhoto');
+  var lblVollee = document.getElementById('lblVollee');
+  var scanMode = 'photo'; /* 'photo' = arrêt auto après capture (PAR DÉFAUT) | 'vollee' = scan continu */
+  var LS_KEY = 'scanregen_state_v1';
+
+  /* ===== SAUVEGARDE LOCALE (sur l'appareil uniquement) ===== */
+  function saveState() {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        lastResult: lastResult, mode: mode, bc: bcFormat.value,
+        hist: hist.slice(0, 30), scanMode: scanMode
+      }));
+    } catch (e) {}
+  }
+  function loadState() {
+    try {
+      var s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+      if (!s) return;
+      if (s.scanMode === 'photo' || s.scanMode === 'vollee') scanMode = s.scanMode;
+      if (Array.isArray(s.hist)) hist = s.hist;
+      if (s.bc) for (var i = 0; i < bcFormat.options.length; i++)
+        if (bcFormat.options[i].value === s.bc) { bcFormat.selectedIndex = i; break; }
+      if (s.mode === 'qr' || s.mode === 'bc') mode = s.mode;
+      if (s.lastResult) lastResult = s.lastResult;
+    } catch (e) {}
+  }
+  function updateModeUI() {
+    modeSwitch.checked = (scanMode === 'photo');
+    lblPhoto.className = 'swLbl' + (scanMode === 'photo' ? ' actif' : '');
+    lblVollee.className = 'swLbl' + (scanMode === 'vollee' ? ' actif' : '');
+  }
+  modeSwitch.addEventListener('change', function () {
+    scanMode = modeSwitch.checked ? 'photo' : 'vollee';
+    updateModeUI(); saveState();
+    statusEl.className = 'hint';
+    statusEl.textContent = scanMode === 'photo'
+      ? 'Mode photo unique : la caméra s' + apos + 'arrêtera automatiquement après chaque code capturé.'
+      : 'Mode scan à la volée : la caméra continue et enchaîne les scans automatiquement.';
+  });
+
+  function updateLibStatus() {
+    var el = document.getElementById('libStatus');
+    if (!el) return;
+    var zx = ('ZXing' in window || 'BarcodeDetector' in window);
+    el.textContent = 'Génération : ✓ 100% intégrée (hors-ligne) | Lecture photo : ' +
+      (zx ? '✓' : '✗ (rechargez une fois avec Internet)');
+  }
+  updateLibStatus();
+
+  /* ================= HISTORIQUE ================= */
+  function renderHistory() {
+    historyEl.innerHTML = '';
+    emptyHist.style.display = hist.length ? 'none' : 'block';
+    hist.slice(0, 12).forEach(function (h) {
+      var li = document.createElement('li');
+      var span = document.createElement('span');
+      span.textContent = h.value;
+      var fmt = document.createElement('span');
+      fmt.className = 'fmt';
+      fmt.textContent = h.format;
+      var btn = document.createElement('button');
+      btn.textContent = '↻';
+      btn.onclick = function () { openResult(h.value, h.format); };
+      li.appendChild(span); li.appendChild(fmt); li.appendChild(btn);
+      historyEl.appendChild(li);
+    });
+  }
+  function saveHistory(value, format) {
+    hist = hist.filter(function (h) { return h.value !== value; });
+    hist.unshift({ value: value, format: format || '' });
+    renderHistory(); saveState();
+  }
+  function wipeAll() {
+    hist = [];
+    lastResult = null; lastVal = null;
+    try { localStorage.removeItem(LS_KEY); } catch (e) {}
+    try { valEl.textContent = ''; editVal.value = ''; resultEl.style.display = 'none'; } catch (e) {}
+    try { output.innerHTML = ''; } catch (e) {}
+    try { historyEl.innerHTML = ''; emptyHist.style.display = 'block'; } catch (e) {}
+    try { photoInput.value = ''; } catch (e) {}
+    renderHistory();
+  }
+  document.getElementById('wipeBtn').onclick = function () {
+    if (confirm('Effacer tous les codes affichés et l\'historique ? (Action immédiate et définitive)')) wipeAll();
+  };
+  renderHistory();
+  /* Restauration après fermeture/rechargement : rien n'est perdu par accident */
+  loadState(); updateModeUI(); renderHistory();
+  if (lastResult) {
+    valEl.textContent = lastResult;
+    editVal.value = lastResult;
+    tabQr.classList.toggle('active', mode === 'qr');
+    tabBc.classList.toggle('active', mode === 'bc');
+    resultEl.style.display = 'block';
+    renderOutput();
+  }
+
+  function beepOk() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880; g.gain.value = 0.25;
+      o.connect(g); g.connect(ctx.destination);
+      o.start(); o.stop(ctx.currentTime + 0.18);
+    } catch (e) {}
+  }
+
+  /* ================= LECTURE (caméra / photo) ================= */
+  var BD_FORMATS = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code','code_93','codabar','data_matrix','pdf417'];
+  function getDetector() {
+    if (detector !== null || !('BarcodeDetector' in window)) return detector;
+    try { detector = new BarcodeDetector({ formats: BD_FORMATS }); } catch (e) { detector = null; }
+    return detector;
+  }
+  var zxCanvas = null, mfr = null, zxLoopId = null;
+  function getZxCanvas() {
+    if (!zxCanvas) zxCanvas = document.createElement('canvas');
+    return zxCanvas;
+  }
+  function fmtName(f) {
+    if (!window.ZXing) return '' + f;
+    for (var k in ZXing.BarcodeFormat) if (ZXing.BarcodeFormat[k] === f) return k;
+    return '' + f;
+  }
+  function getReader() {
+    if (mfr || !window.ZXing) return mfr;
+    try {
+      var BF = ZXing.BarcodeFormat;
+      var hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.UPC_E, BF.CODE_128, BF.CODE_39,
+        BF.CODE_93, BF.ITF, BF.QR_CODE, BF.CODABAR, BF.DATA_MATRIX, BF.PDF_417
+      ]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      mfr = new ZXing.MultiFormatReader();
+      mfr.setHints(hints);
+    } catch (e) { mfr = null; }
+    return mfr;
+  }
+  function zxDecodeLs(ls) {
+    var r = getReader().decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(ls)));
+    return { text: r.getText(), format: fmtName(r.getBarcodeFormat()) };
+  }
+  /* Décode une image/video dessinée dans un canvas — API 0.21 : MultiFormatReader + LuminanceSource */
+  function zxDecodeElement(el) {
+    if (!window.ZXing || !getReader()) return null;
+    var w = el.videoWidth || el.naturalWidth || el.width;
+    var h = el.videoHeight || el.naturalHeight || el.height;
+    if (!w || !h) return null;
+    var scale = Math.min(1, 1200 / Math.max(w, h));
+    var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+    var c = getZxCanvas(); c.width = cw; c.height = ch;
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(el, 0, 0, cw, ch);
+    var ls = new ZXing.HTMLCanvasElementLuminanceSource(c);
+    try { return zxDecodeLs(ls); } catch (e1) {}
+    try { return zxDecodeLs(ls.rotateCounterClockwise()); } catch (e2) {}
+    return null;
+  }
+
+  function stopScan() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (zxLoopId) { clearTimeout(zxLoopId); zxLoopId = null; }
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    video.srcObject = null;
+    startBtn.textContent = '▶︎ Démarrer la caméra';
+  }
+
+  /* ===== MISE AU POINT + ZOOM AUTOMATIQUES (V15) ===== */
+  function autoFocusZoom() {
+    try {
+      var track = stream.getVideoTracks()[0];
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      var adv = [];
+      /* Mise au point : mode continu si le téléphone le propose */
+      if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('continuous') !== -1) {
+        adv.push({ focusMode: 'continuous' });
+      }
+      /* Zoom automatique : x2 si la caméra le permet (sans dépasser ses limites) */
+      if (caps.zoom && caps.zoom.max > 1) {
+        var z = Math.min(caps.zoom.max, 2);
+        if (caps.zoom.min && z < caps.zoom.min) z = caps.zoom.min;
+        adv.push({ zoom: z });
+      }
+      if (adv.length) {
+        track.applyConstraints({ advanced: adv }).then(function () {
+          if (running) {
+            statusEl.className = 'hint';
+            statusEl.textContent = '🎥 Caméra prête — mise au point et zoom automatiques activés. Visez le code-barres.';
+          }
+        }).catch(function () {});
+      }
+    } catch (e) {}
+  }
+
+  async function startScan() {
+    if (running) { stopScan(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusEl.textContent = 'Caméra indisponible ici : utilisez « Scanner depuis une photo » ou hébergez la page en HTTPS.';
+      statusEl.className = 'hint err';
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      running = true;
+      startBtn.textContent = '⏸ Arrêter la caméra';
+      statusEl.className = 'hint';
+      statusEl.textContent = 'Visez le code-barres, la détection est automatique.';
+      autoFocusZoom(); /* mise au point + zoom automatiques dès l'ouverture */
+      var bd = getDetector();
+      if (bd) tick();
+      else if (window.ZXing) zxTick();
+      else {
+        statusEl.textContent = 'Moteur de lecture non chargé. Rechargez la page avec Internet, ou utilisez « Scanner depuis une photo ».';
+        statusEl.className = 'hint err';
+        stopScan();
+      }
+    } catch (e) {
+      statusEl.textContent = 'Accès caméra refusé ou indisponible : ' + (e && e.message ? e.message : e) + ' — utilisez « Scanner depuis une photo ».';
+      statusEl.className = 'hint err';
+    }
+  }
+
+  function tick() {
+    if (!running) return;
+    getDetector().detect(video).then(function (codes) {
+      if (codes && codes.length > 0) onDetected(codes[0].rawValue, '' + codes[0].format);
+      rafId = requestAnimationFrame(tick);
+    }).catch(function () { rafId = requestAnimationFrame(tick); });
+  }
+
+  /* Boucle de secours (ZXing) : capture une frame vidéo toutes les 250 ms et la décode via canvas */
+  function zxTick() {
+    if (!running) return;
+    try {
+      var r = zxDecodeElement(video);
+      if (r) onDetected(r.text, r.format);
+    } catch (e) {}
+    zxLoopId = setTimeout(zxTick, 250);
+  }
+
+  function onDetected(value, format) {
+    if (!value) return;
+    var now = Date.now();
+    if (lastVal === value && now - cooldown < 4000) return;
+    lastVal = value; cooldown = now;
+    beepOk();
+    if (scanMode === 'photo' && running) {
+      stopScan();
+      statusEl.className = 'hint';
+      statusEl.textContent = '✅ Code capturé — caméra arrêtée (mode photo unique). Relancez « Démarrer la caméra » pour un nouveau scan.';
+    }
+    saveHistory(value, format);
+    openResult(value, format);
+  }
+
+  /* ================= RÉSULTAT / AFFICHAGE ================= */
+  var FORMAT_MAP = { EAN_13:'EAN13', EAN_8:'EAN8', UPC_A:'UPC', UPC_E:'UPC',
+    CODE_128:'CODE128', CODE_39:'CODE39', ITF:'ITF14', ITF_14:'ITF14',
+    ean_13:'EAN13', ean_8:'EAN8', upc_a:'UPC', upc_e:'UPC',
+    code_128:'CODE128', code_39:'CODE39', itf:'ITF14', itf_14:'ITF14' };
+
+  function openResult(value, format) {
+    lastResult = value;
+    valEl.textContent = value;
+    editVal.value = value;
+    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null);
+    var digits = value.replace(/\D/g, '');
+    if (mapped === 'QR_CODE') { mode = 'qr'; }
+    else if (mapped) { mode = 'bc'; }
+    else if (digits.length >= 7 && digits.length <= 14 && digits === value) {
+      mapped = digits.length <= 8 ? 'EAN8' : (digits.length === 14 ? 'ITF14' : 'EAN13');
+      mode = 'bc';
+    }
+    if (mapped && mapped !== 'QR_CODE') {
+      for (var i = 0; i < bcFormat.options.length; i++) {
+        if (bcFormat.options[i].value === mapped) { bcFormat.selectedIndex = i; break; }
+      }
+    }
+    tabQr.classList.toggle('active', mode === 'qr');
+    tabBc.classList.toggle('active', mode === 'bc');
+    resultEl.style.display = 'block';
+    resultEl.scrollIntoView({ behavior: 'smooth' });
+    renderOutput();
+    saveState();
+  }
+
+  /* ================= GÉNÉRATEUR QR INTÉGRÉ ================= */
+  var BuiltinQR = (function () {
+    var EXP = new Array(512), LOG = new Array(256);
+    (function () { var x = 1;
+      for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; }
+      for (var j = 255; j < 512; j++) EXP[j] = EXP[j - 255]; })();
+    function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]]; }
+    function buildGen(deg) {
+      var g = [1];
+      for (var i = 0; i < deg; i++) {
+        var ng = new Array(g.length + 1).fill(0);
+        for (var j = 0; j < g.length; j++) { ng[j] ^= g[j]; ng[j + 1] ^= gmul(g[j], EXP[i]); }
+        g = ng;
+      }
+      return g;
+    }
+    function rsEncode(data, ecLen) {
+      var gen = buildGen(ecLen), rem = data.concat(new Array(ecLen).fill(0));
+      for (var i = 0; i < data.length; i++) {
+        var f = rem[i];
+        if (f !== 0) for (var j = 0; j < gen.length; j++) rem[i + j] ^= gmul(gen[j], f);
+      }
+      return rem.slice(data.length);
+    }
+    var CAP = [[21,16,10],[25,28,16],[29,44,26]];
+    var CAPL = [[21,19,7],[25,34,10],[29,55,15]];
+    var ALIGN = { 1: [], 2: [18], 3: [22] };
+    var bitB = function (i) { return (0x5412 >> i) & 1; };
+    var bitL = function (i) { return (0x77C4 >> i) & 1; };
+    function build(text) {
+      var utf = [];
+      for (var i = 0; i < text.length; i++) {
+        var c = text.charCodeAt(i);
+        if (c > 255) throw new Error('Caractère non supporté');
+        utf.push(c);
+      }
+      var vi = 0, lvlM = true;
+      while (vi < CAP.length && utf.length + 2 > CAP[vi][1]) vi++;
+      if (vi >= CAP.length) {
+        lvlM = false; vi = 0;
+        while (vi < CAPL.length && utf.length + 2 > CAPL[vi][1]) vi++;
+        if (vi >= CAPL.length) throw new Error('TROP LONG');
+      }
+      var CAPX = lvlM ? CAP[vi] : CAPL[vi];
+      var fmtB = lvlM ? bitB : bitL;
+      var n = CAPX[0], dataLen = CAPX[1], ecLen = CAPX[2], version = vi + 1;
+      var bits = [0,1,0,0];
+      for (var b = 7; b >= 0; b--) bits.push((utf.length >> b) & 1);
+      utf.forEach(function (byte) { for (var k = 7; k >= 0; k--) bits.push((byte >> k) & 1); });
+      bits.push(0,0,0,0);
+      while (bits.length % 8) bits.push(0);
+      var totalBits = dataLen * 8;
+      if (bits.length > totalBits) throw new Error('DEBORDE');
+      while (bits.length < totalBits) [1,1,1,0,1,1,0,0,0,0,0,1,0,0,0,1].forEach(function (x) { if (bits.length < totalBits) bits.push(x); });
+      var dataBytes = [];
+      for (var i2 = 0; i2 < bits.length; i2 += 8) { var v = 0; for (var j2 = 0; j2 < 8; j2++) v = (v << 1) | bits[i2 + j2]; dataBytes.push(v); }
+      var stream = [];
+      dataBytes.concat(rsEncode(dataBytes, ecLen)).forEach(function (byte) { for (var k = 7; k >= 0; k--) stream.push((byte >> k) & 1); });
+      var M = [], R = [];
+      for (var r = 0; r < n; r++) { M.push(new Array(n).fill(null)); R.push(new Array(n).fill(false)); }
+      function mark(x, y) { if (x >= 0 && y >= 0 && x < n && y < n) R[y][x] = true; }
+      function setFinder(x, y) {
+        for (var dy = -1; dy <= 7; dy++) for (var dx = -1; dx <= 7; dx++) {
+          var px = x + dx, py = y + dy;
+          if (px < 0 || py < 0 || px >= n || py >= n) continue;
+          var dark = (dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6) &&
+                     (dx === 0 || dx === 6 || dy === 0 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+          M[py][px] = dark ? 1 : 0; mark(px, py);
+        }
+      }
+      setFinder(0,0); setFinder(n-7,0); setFinder(0,n-7);
+      for (var t = 8; t < n-8; t++) { M[6][t] = (t%2===0)?1:0; M[t][6] = (t%2===0)?1:0; mark(t,6); mark(6,t); }
+      var al = ALIGN[version];
+      al.forEach(function (cy) { al.forEach(function (cx) {
+        if ((cx===6&&cy===6)||(cx===6&&cy===n-7)||(cx===n-7&&cy===6)) return;
+        for (var dy=-2;dy<=2;dy++) for (var dx=-2;dx<=2;dx++) { M[cy+dy][cx+dx]=(Math.max(Math.abs(dx),Math.abs(dy))!==1)?1:0; mark(cx+dx,cy+dy); }
+      }); });
+      for (var f = 0; f <= 8; f++) { mark(f,8); mark(8,f); }
+      for (var f2 = 0; f2 < 8; f2++) { mark(n-1-f2,8); mark(8,n-1-f2); }
+      M[4*version+9][8] = 1; mark(8, 4*version+9);
+      var idx = 0, dirUp = true;
+      for (var col = n-1; col > 0; col -= 2) {
+        if (col === 6) col--;
+        for (var rr = 0; rr < n; rr++) {
+          var row = dirUp ? (n-1-rr) : rr;
+          for (var c2 = 0; c2 < 2; c2++) {
+            var x = col - c2;
+            if (!R[row][x] && M[row][x] === null) M[row][x] = idx < stream.length ? stream[idx++] : 0;
+          }
+        }
+        dirUp = !dirUp;
+      }
+      for (var yy = 0; yy < n; yy++) for (var xx = 0; xx < n; xx++)
+        if (!R[yy][xx]) M[yy][xx] = M[yy][xx] ^ (((yy+xx)%2===0) ? 1 : 0);
+      M[8][0]=fmtB(14); M[8][1]=fmtB(13); M[8][2]=fmtB(12); M[8][3]=fmtB(11); M[8][4]=fmtB(10); M[8][5]=fmtB(9);
+      M[8][7]=fmtB(8); M[8][8]=fmtB(7); M[7][8]=fmtB(6); M[5][8]=fmtB(5); M[4][8]=fmtB(4); M[3][8]=fmtB(3); M[2][8]=fmtB(2); M[1][8]=fmtB(1); M[0][8]=fmtB(0);
+      for (var q2 = 0; q2 < 7; q2++) M[8][n-1-q2] = fmtB(14-q2);
+      for (var q3 = 0; q3 < 8; q3++) M[n-8+q3][8] = fmtB(7-q3);
+      return { n: n, M: M };
+    }
+    function svg(text, cs0, mg0) {
+      var Q = build(text), n = Q.n, cs = cs0 || 8, mg = mg0 || 4;
+      var size = (n + mg * 2) * cs;
+      var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">';
+      s += '<rect width="100%" height="100%" fill="#fff"/>';
+      var path = '';
+      for (var y = 0; y < n; y++) for (var x = 0; x < n; x++)
+        if (Q.M[y][x]) path += 'M' + ((x+mg)*cs) + ' ' + ((y+mg)*cs) + 'h' + cs + 'v' + cs + 'h-' + cs + 'z';
+      s += '<path d="' + path + '" fill="#000"/>';
+      s += '</svg>';
+      return s;
+    }
+    return { svg: svg };
+  })();
+
+  /* ================= GÉNÉRATEURS CODE-BARRES INTÉGRÉS ================= */
+  var EAN_L = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+  var EAN_G = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+  var EAN_R = ['1110010','1100110','1101100','1000010','1011100','1001110','1010000','1000100','1001000','1110100'];
+  var EAN_PARITY = ['LLLLLL','LLGLGG','LLGGLG','LLGGGL','LGLLGG','LGGLLG','LGGGLL','LGLGLG','LGLGGL','LGGLGL'];
+
+  function eanCheckDigit(d) {
+    var sum = 0;
+    for (var i = 0; i < d.length; i++) {
+      var w = (i % 2 === 0) ? (d.length % 2 === 0 ? 1 : 3) : (d.length % 2 === 0 ? 3 : 1);
+      sum += Number(d[i]) * w;
+    }
+    return String((10 - sum % 10) % 10);
+  }
+  function eanUpcCheck(d) { // 11 chiffres (UPC)
+    var sum = 0;
+    for (var i = 0; i < d.length; i++) sum += Number(d[i]) * (i % 2 === 0 ? 3 : 1);
+    return String((10 - sum % 10) % 10);
+  }
+  function eanUpcCheck13(d) { // 13 chiffres (ITF-14)
+    var sum = 0;
+    for (var i = 0; i < d.length; i++) sum += Number(d[i]) * (i % 2 === 0 ? 3 : 1);
+    return String((10 - sum % 10) % 10);
+  }
+  function eanBits(code) {
+    var p = EAN_PARITY[Number(code[0])], bits = '101';
+    for (var i = 1; i <= 6; i++) bits += (p[i-1] === 'L' ? EAN_L : EAN_G)[Number(code[i])];
+    bits += '01010';
+    for (var j = 7; j < 13; j++) bits += EAN_R[Number(code[j])];
+    return bits + '101';
+  }
+  function ean8BitsOf(code) {
+    var bits = '101';
+    for (var i = 0; i < 4; i++) bits += EAN_L[Number(code[i])];
+    bits += '01010';
+    for (var j = 4; j < 8; j++) bits += EAN_R[Number(code[j])];
+    return bits + '101';
+  }
+  function normalizeEan(value, format) {
+    var v = value.replace(/\D/g, '');
+    if (format === 'EAN13') {
+      if (v.length === 12) return v + eanCheckDigit(v);
+      if (v.length === 13) return v;
+      return null;
+    }
+    if (format === 'EAN8') {
+      if (v.length === 7) return v + eanCheckDigit(v);
+      if (v.length === 8) return v;
+      return null;
+    }
+    if (format === 'UPC') {
+      if (v.length === 11) v = v + eanUpcCheck(v);
+      if (v.length === 12) return '0' + v;
+      return null;
+    }
+    return null;
+  }
+  function bitsToSvg(bits, label, guardPositions) {
+    var n = bits.length, w = 3, h = 120, gs = 36;
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + (n * w + 24) + '" height="' + (h + gs + 24) + '" viewBox="0 0 ' + (n * w + 24) + ' ' + (h + gs + 24) + '">';
+    svg += '<rect width="100%" height="100%" fill="#fff"/>';
+    for (var i = 0; i < n; i++) {
+      if (bits[i] === '1') {
+        var hh = (guardPositions && guardPositions.indexOf(i) !== -1) ? h + gs : h;
+        svg += '<rect x="' + (12 + i * w) + '" y="12" width="' + w + '" height="' + hh + '" fill="#000"/>';
+      }
+    }
+    var fs = 22;
+    if (label.length === 13) {
+      svg += '<text x="12" y="' + (h + gs + 10) + '" font-family="monospace" font-size="' + fs + '" fill="#000">' + label[0] + '</text>';
+      svg += '<text x="' + (12 + 3 * w) + '" y="' + (h + gs + 10) + '" font-family="monospace" font-size="' + fs + '" fill="#000" textLength="' + (42 * w) + '" lengthAdjust="spacing">' + label.slice(1, 7) + '</text>';
+      svg += '<text x="' + (12 + 50 * w) + '" y="' + (h + gs + 10) + '" font-family="monospace" font-size="' + fs + '" fill="#000" textLength="' + (42 * w) + '" lengthAdjust="spacing">' + label.slice(7) + '</text>';
+    } else {
+      svg += '<text x="' + (12 + 3 * w) + '" y="' + (h + gs + 10) + '" font-family="monospace" font-size="' + fs + '" fill="#000" textLength="' + (28 * w) + '" lengthAdjust="spacing">' + label.slice(0, 4) + '</text>';
+      svg += '<text x="' + (12 + 36 * w) + '" y="' + (h + gs + 10) + '" font-family="monospace" font-size="' + fs + '" fill="#000" textLength="' + (28 * w) + '" lengthAdjust="spacing">' + label.slice(4) + '</text>';
+    }
+    svg += '</svg>';
+    return svg;
+  }
+
+  function elementsSvg(els, label, showText) {
+    var mod = 3, h = 130, quiet = 10 * mod, pad = 16, fs = 24, ts = 40;
+    var total = els.reduce(function (a, b) { return a + b; }, 0) * mod;
+    var W = total + quiet * 2 + pad * 2, H = h + pad * 2 + (showText ? ts : 0);
+    var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">';
+    s += '<rect width="100%" height="100%" fill="#fff"/>';
+    var x = quiet + pad, bar = true;
+    for (var i = 0; i < els.length; i++) {
+      var wpx = els[i] * mod;
+      if (bar) s += '<rect x="' + x + '" y="' + pad + '" width="' + wpx + '" height="' + h + '" fill="#000"/>';
+      x += wpx; bar = !bar;
+    }
+    if (showText) s += '<text x="' + (W / 2) + '" y="' + (H - 8) + '" font-family="monospace" font-size="' + fs + '" fill="#000" text-anchor="middle">' + label.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</text>';
+    s += '</svg>';
+    return s;
+  }
+
+  function builtInBarcode(value, format) {
+    if (format === 'CODE128') {
+      var C128T = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141"];
+      var C9599 = ["114113","114311","411113","411311","113141"];
+      var C1002 = ["114131","311141","411131"];
+      var STARTSW = { 103: "211412", 104: "211214", 105: "211232" };
+      function wOf(v) { return v < 95 ? C128T[v] : v < 100 ? C9599[v - 95] : C1002[v - 100]; }
+      if (!/^[\x20-\x7E]+$/.test(value)) return { err: 'Code 128 : caractères autorisés = chiffres, lettres et symboles simples.' };
+      var syms = [];
+      if (/^\d+$/.test(value) && value.length % 2 === 0 && value.length >= 2) {
+        syms.push(105);
+        for (var i = 0; i < value.length; i += 2) syms.push(Number(value.slice(i, i + 2)));
+      } else {
+        syms.push(104);
+        for (var j = 0; j < value.length; j++) syms.push(value.charCodeAt(j) - 32);
+      }
+      var sum = syms[0];
+      for (var k = 1; k < syms.length; k++) sum += syms[k] * k;
+      syms.push(sum % 103);
+      var wstr = STARTSW[syms[0]];
+      for (var m = 1; m < syms.length; m++) wstr += wOf(syms[m]);
+      wstr += "2331112";
+      return elementsSvg(wstr.split('').map(Number), value, true);
+    }
+    if (format === 'CODE39') {
+      var C39B = { '1':[1,0,0,0,1],'2':[0,1,0,0,1],'3':[1,1,0,0,0],'4':[0,0,1,0,1],'5':[1,0,1,0,0],'6':[0,1,1,0,0],'7':[0,0,0,1,1],'8':[1,0,0,1,0],'9':[0,1,0,1,0],'0':[0,0,1,1,0] };
+      function bars39(n) { return C39B[String(n === 10 ? 0 : n)]; }
+      var C39 = {};
+      '1234567890'.split('').forEach(function (d, i) { C39[d] = { bars: bars39(i === 0 ? 10 : i), sp: 2 }; });
+      'ABCDEFGHIJ'.split('').forEach(function (c, i) { C39[c] = { bars: bars39(i + 1), sp: 3 }; });
+      'KLMNOPQRST'.split('').forEach(function (c, i) { C39[c] = { bars: bars39(i + 1), sp: 4 }; });
+      'UVWXYZ'.split('').forEach(function (c, i) { C39[c] = { bars: bars39(i + 1), sp: 1 }; });
+      C39['-'] = { bars: bars39(7), sp: 1 }; C39['.'] = { bars: bars39(8), sp: 1 };
+      C39[' '] = { bars: bars39(9), sp: 1 }; C39['*'] = { bars: bars39(10), sp: 1 };
+      C39['$'] = { bars: [0,0,0,0,0], ns: 1 }; C39['/'] = { bars: [0,0,0,0,0], ns: 2 };
+      C39['+'] = { bars: [0,0,0,0,0], ns: 3 }; C39['%'] = { bars: [0,0,0,0,0], ns: 4 };
+      var val39 = value.toUpperCase();
+      var ok39 = true;
+      for (var v39 = 0; v39 < val39.length; v39++) if (!C39[val39[v39]]) ok39 = false;
+      if (!ok39) return { err: 'Code 39 : caractères autorisés = chiffres, MAJUSCULES, espace, - . $ / + %.' };
+      function char39(c) {
+        var e = C39[c], els = [];
+        for (var i2 = 0; i2 < 5; i2++) {
+          els.push(e.bars[i2] ? 3 : 1);
+          if (i2 < 4) {
+            if (e.ns) els.push(e.ns === i2 + 1 ? 1 : 3);
+            else els.push(e.sp === i2 + 1 ? 3 : 1);
+          }
+        }
+        return els;
+      }
+      var seq = char39('*');
+      for (var p = 0; p < val39.length; p++) seq = seq.concat([1], char39(val39[p]));
+      seq = seq.concat([1], char39('*'));
+      return elementsSvg(seq, val39, true);
+    }
+    if (format === 'ITF14') {
+      var v14 = value.replace(/\D/g, '');
+      if (v14.length === 13) v14 = v14 + eanUpcCheck13(v14);
+      if (v14.length !== 14) return { err: 'ITF-14 : 13 chiffres (clé ajoutée automatiquement) ou 14 chiffres requis.' };
+      var ITFD = ['00110','10001','01001','11000','00101','10100','01100','00011','10010','01010'];
+      var seq2 = [1, 1, 1, 1];
+      for (var p2 = 0; p2 < 14; p2 += 2) {
+        var b = ITFD[Number(v14[p2])], s = ITFD[Number(v14[p2 + 1])];
+        for (var q2 = 0; q2 < 5; q2++) { seq2.push(b[q2] === '1' ? 3 : 1); seq2.push(s[q2] === '1' ? 3 : 1); }
+      }
+      seq2.push(3, 1, 1);
+      return elementsSvg(seq2, v14, true);
+    }
+    var v = normalizeEan(value, format);
+    if (!v) return { err: 'Cette valeur n\'a pas le bon nombre de chiffres pour ce format (EAN-13 : 12 ou 13 chiffres, EAN-8 : 7 ou 8, UPC : 11 ou 12).' };
+    if (format === 'EAN8') return bitsToSvg(ean8BitsOf(v), v, [0,1,2,32,33,34,35,36,64,65,66]);
+    return bitsToSvg(eanBits(v), v, [0,1,2,45,46,47,48,49,92,93,94]);
+  }
+
+  function showError(msg) {
+    output.innerHTML = '';
+    var p = document.createElement('div');
+    p.className = 'hint err';
+    p.textContent = msg;
+    output.appendChild(p);
+  }
+
+  function renderOutput() {
+    var value = lastResult || '';
+    output.innerHTML = '';
+    if (!value) return;
+    if (mode === 'qr') {
+      var qrSvg = null, qrErr = '';
+      try { qrSvg = BuiltinQR.svg(value, 8, 4); }
+      catch (e) { qrErr = (e && e.message === 'TROP LONG') ? 'TROP LONG' : String(e && e.message ? e.message : e); }
+      if (qrSvg) {
+        var holder = document.createElement('div');
+        holder.innerHTML = qrSvg;
+        output.appendChild(holder);
+      } else {
+        showError(qrErr === 'TROP LONG'
+          ? 'Texte trop long pour le QR intégré (max 53 caractères). Utilisez le code-barres.'
+          : 'Impossible de générer le QR code.');
+      }
+    } else {
+      var res = builtInBarcode(value, bcFormat.value);
+      if (typeof res === 'string') {
+        var holder2 = document.createElement('div');
+        holder2.innerHTML = res;
+        holder2.firstChild.style.maxWidth = '100%';
+        holder2.firstChild.style.height = 'auto';
+        output.appendChild(holder2);
+      } else {
+        showError(res.err || 'Impossible de générer ce code-barres.');
+      }
+    }
+  }
+
+  /* ================= EXPORT PNG / IMPRESSION / PLEIN ÉCRAN ================= */
+  function currentSvg() { return output.querySelector('svg'); }
+
+  pngBtn.addEventListener('click', function () {
+    var srcSvg = currentSvg();
+    if (!srcSvg) return;
+    try {
+      var xml = new XMLSerializer().serializeToString(srcSvg);
+      var svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+      var url = URL.createObjectURL(svgBlob);
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.max(2, 1200 / (srcSvg.viewBox.baseVal.width || img.width || 600));
+        var vb = srcSvg.viewBox.baseVal;
+        var w = (vb && vb.width) ? vb.width : (img.width || 600);
+        var h = (vb && vb.height) ? vb.height : (img.height || 400);
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(function (blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'code-' + String(lastResult || '').replace(/[^a-zA-Z0-9\-]/g, '_') + '.png';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () { a.remove(); }, 500);
+        }, 'image/png');
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        showError('Export PNG impossible sur ce navigateur. Utilisez « Imprimer / PDF ».');
+      };
+      img.src = url;
+    } catch (e) {
+      showError('Export PNG impossible : ' + (e && e.message ? e.message : e));
+    }
+  });
+
+  printBtn.addEventListener('click', function () {
+    var srcSvg = currentSvg();
+    if (!srcSvg || !lastResult) return;
+    document.getElementById('printVal').textContent = lastResult;
+    document.getElementById('printTitle').textContent =
+      mode === 'qr' ? 'QR Code régénéré' : 'Code-barres régénéré (' + bcFormat.options[bcFormat.selectedIndex].text + ')';
+    var holder = document.getElementById('printCode');
+    holder.innerHTML = '';
+    var clone = srcSvg.cloneNode(true);
+    clone.removeAttribute('width');
+    clone.removeAttribute('height');
+    holder.appendChild(clone);
+    window.print();
+  });
+
+  fullBtn.addEventListener('click', function () {
+    var srcSvg = currentSvg();
+    if (!srcSvg) return;
+    var old = document.getElementById('fsOverlay');
+    if (old) old.remove();
+    var ov = document.createElement('div');
+    ov.id = 'fsOverlay';
+    var clone = srcSvg.cloneNode(true);
+    clone.style.maxWidth = '96vw';
+    clone.style.maxHeight = '80vh';
+    clone.style.width = 'auto';
+    clone.style.height = 'auto';
+    ov.appendChild(clone);
+    var btn = document.createElement('button');
+    btn.className = 'close';
+    btn.textContent = '✕ Fermer';
+    btn.addEventListener('click', function () { ov.remove(); });
+    ov.appendChild(btn);
+    ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+  });
+
+  /* ================= ÉVÉNEMENTS ================= */
+  startBtn.addEventListener('click', startScan);
+  photoBtn.addEventListener('click', function () { photoInput.value = ''; photoInput.click(); });
+  photoInput.addEventListener('change', function () {
+    var f = photoInput.files && photoInput.files[0];
+    if (!f) return;
+    statusEl.className = 'hint';
+    statusEl.textContent = 'Analyse de la photo…';
+    var url = URL.createObjectURL(f);
+    var img = new Image();
+    img.onload = function () {
+      var done = false;
+      function finish(ok, msg) {
+        if (done) return; done = true;
+        URL.revokeObjectURL(url);
+        statusEl.textContent = msg;
+        statusEl.className = ok ? 'hint' : 'hint err';
+      }
+      var bd = getDetector();
+      if (bd) {
+        bd.detect(img).then(function (codes) {
+          if (codes && codes.length > 0) {
+            finish(true, 'Code trouvé ✓');
+            onDetected(codes[0].rawValue, '' + codes[0].format);
+          } else finish(false, 'Aucun code détecté sur cette photo. Rapprochez-vous, assurez-vous que le code est net et bien éclairé.');
+        }).catch(function () { finish(false, 'Analyse impossible. Réessayez.'); });
+      } else if (window.ZXing) {
+        var r = zxDecodeElement(img);
+        if (r) { finish(true, 'Code trouvé ✓'); onDetected(r.text, r.format); }
+        else finish(false, 'Aucun code détecté sur cette photo. Rapprochez-vous, assurez-vous que le code est net et bien éclairé.');
+      } else {
+        finish(false, 'Moteur de lecture non chargé. Rechargez la page avec Internet.');
+      }
+    };
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      statusEl.className = 'hint err';
+      statusEl.textContent = 'Impossible de lire cette image.';
+    };
+    img.src = url;
+  });
+
+  tabQr.addEventListener('click', function () { mode = 'qr'; tabQr.classList.add('active'); tabBc.classList.remove('active'); renderOutput(); saveState(); });
+  tabBc.addEventListener('click', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); renderOutput(); saveState(); });
+  bcFormat.addEventListener('change', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); renderOutput(); saveState(); });
+  applyBtn.addEventListener('click', function () {
+    var v = editVal.value.trim();
+    if (!v) return;
+    lastResult = v; valEl.textContent = v; saveHistory(v, 'MANUEL'); renderOutput();
+  });
+  editVal.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyBtn.click(); });
+  editVal.addEventListener('input', function () { valEl.textContent = editVal.value; lastResult = editVal.value; saveState(); });
+  closeBtn.addEventListener('click', function () { resultEl.style.display = 'none'; });
+
+  /* ===== GÉNÉRATEUR DEPUIS UN TEXTE ===== */
+  var genInput = document.getElementById('genInput');
+  var genQrBtn = document.getElementById('genQrBtn');
+  var genBcBtn = document.getElementById('genBcBtn');
+  function generateFromText(bcMode) {
+    var v = genInput.value.trim();
+    if (!v) { genInput.focus(); return; }
+    if (bcMode) {
+      mode = 'bc'; bcFormat.value = 'CODE128';
+      tabBc.classList.add('active'); tabQr.classList.remove('active');
+    } else {
+      mode = 'qr';
+      tabQr.classList.add('active'); tabBc.classList.remove('active');
+    }
+    lastResult = v; valEl.textContent = v; editVal.value = v;
+    saveHistory(v, bcMode ? 'CODE128' : 'QR');
+    resultEl.style.display = 'block';
+    resultEl.scrollIntoView({ behavior: 'smooth' });
+    renderOutput(); saveState();
+  }
+  genQrBtn.addEventListener('click', function () { generateFromText(false); });
+  genBcBtn.addEventListener('click', function () { generateFromText(true); });
+  genInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') genQrBtn.click(); });
+
+  /* ===== BOUTON EFFACER : supprime le code affiché ET le texte.
+     L'historique reste sauvegardé jusqu'au « Tout effacer ». ===== */
+  var clearBtn = document.getElementById('clearBtn');
+  clearBtn.addEventListener('click', function () {
+    lastResult = null;
+    valEl.textContent = '';
+    editVal.value = '';
+    genInput.value = '';
+    output.innerHTML = '';
+    resultEl.style.display = 'none';
+    saveState();
+  });
+})();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+  });
+}
+</script>
+</body>
+</html>
