@@ -82,6 +82,19 @@
     <button class="sec flashBtn auto" id="flashBtn" style="display:none;margin-top:10px">🔦 Flash : auto</button>
     <div id="flashHint" class="hint" style="display:none"></div>
     <button class="sec" id="photoBtn">🖼️ Scanner depuis une photo</button>
+    <div class="hint" style="margin-top:10px;margin-bottom:0">🔎 Type de code à lire (facultatif — améliore la reconnaissance) :</div>
+    <select id="scanFormat">
+      <option value="auto">Tous les types (détection automatique)</option>
+      <option value="QR_CODE">QR Code</option>
+      <option value="EAN_13">Code-barres EAN-13 (produits)</option>
+      <option value="EAN_8">Code-barres EAN-8</option>
+      <option value="UPC_A">Code-barres UPC-A</option>
+      <option value="CODE_128">Code-barres Code 128</option>
+      <option value="CODE_39">Code-barres Code 39</option>
+      <option value="ITF">Code-barres ITF (ITF-14, 2/5)</option>
+      <option value="DATA_MATRIX">DataMatrix</option>
+    </select>
+    <button class="sec" id="ocrBtn" style="display:none">🔎 Lire le numéro écrit à côté du code</button>
     <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
     <canvas id="zxCanvas" style="display:none"></canvas>
     <div id="scanStatus" class="hint">Visez le code-barres, la détection est automatique.</div>
@@ -92,14 +105,24 @@
     <div style="font-weight:700;margin-bottom:6px">✍️ Générer un code depuis un texte</div>
     <input type="text" id="genInput" placeholder="Tapez ici votre texte, URL ou code…" />
     <button id="genQrBtn">⚡ Générer un QR Code</button>
-    <button class="sec" id="genBcBtn">⊢ Générer un code-barres (Code 128)</button>
-    <div class="hint">QR Code : tout texte (URL, Wi-Fi, texte libre). Code 128 : chiffres et lettres simples. Tout code généré est conservé jusqu'à « Tout effacer ».</div>
+    <button class="sec" id="genBcBtn">⊢ Générer un code-barres (type choisi dessous)</button>
+    <select id="genFormat">
+      <option value="CODE128">Code 128 (le plus universel)</option>
+      <option value="EAN13">EAN-13 (13 chiffres, produits)</option>
+      <option value="EAN8">EAN-8 (8 chiffres)</option>
+      <option value="ITF14">ITF-14 / EAN-14 (14 chiffres, cartons)</option>
+      <option value="UPC">UPC-A (12 chiffres)</option>
+      <option value="CODE39">Code 39 (chiffres + MAJUSCULES)</option>
+      <option value="ITF">ITF 2/5 (nombre pair de chiffres)</option>
+    </select>
+    <div class="hint">QR Code : tout texte (URL, Wi-Fi, texte libre). Code-barres : choisissez le type dans la liste ci-dessus (Code 128 : chiffres et lettres simples ; EAN-13 : 12 ou 13 chiffres ; ITF-14 / EAN-14 : 13 ou 14 chiffres ; la clé de contrôle manquante est calculée automatiquement). Tout code généré est conservé jusqu'à « Tout effacer ».</div>
   </div>
 
   <div class="card" id="result">
     <div style="text-align:right"><button class="sec" id="closeBtn" style="width:auto;padding:6px 12px">✕</button></div>
     <div class="hint">Code détecté :</div>
     <div class="val" id="val"></div>
+    <div class="hint" id="repairNote" style="display:none"></div>
     <input type="text" id="editVal" placeholder="…ou saisissez un code à la main" />
     <button class="sec" id="applyBtn">↻ Régénérer avec cette valeur</button>
 
@@ -109,12 +132,14 @@
     </div>
     <select id="bcFormat">
       <option value="CODE128">Code 128 (le plus universel)</option>
-      <option value="EAN13">EAN-13</option>
-      <option value="EAN8">EAN-8</option>
-      <option value="UPC">UPC-A</option>
-      <option value="CODE39">Code 39</option>
-      <option value="ITF14">ITF-14</option>
+      <option value="EAN13">EAN-13 (13 chiffres, produits)</option>
+      <option value="EAN8">EAN-8 (8 chiffres)</option>
+      <option value="ITF14">ITF-14 / EAN-14 (14 chiffres, cartons)</option>
+      <option value="UPC">UPC-A (12 chiffres)</option>
+      <option value="CODE39">Code 39 (chiffres + MAJUSCULES)</option>
+      <option value="ITF">ITF 2/5 (nombre pair de chiffres)</option>
     </select>
+    <div class="hint">Autres types lisibles à la caméra : QR Code, DataMatrix, PDF417, Code 93, Codabar, UPC-E.</div>
     <div id="output"></div>
     <button id="fullBtn">⤢ Afficher en plein écran</button>
     <button class="sec" id="pngBtn">💾 Télécharger en image (PNG)</button>
@@ -138,6 +163,8 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
 (function () {
   var video = document.getElementById('video');
@@ -153,6 +180,9 @@
   var tabQr = document.getElementById('tabQr');
   var tabBc = document.getElementById('tabBc');
   var bcFormat = document.getElementById('bcFormat');
+  var genFormat = document.getElementById('genFormat');
+  var scanFormatSel = document.getElementById('scanFormat');
+  var repairNote = document.getElementById('repairNote');
   var fullBtn = document.getElementById('fullBtn');
   var pngBtn = document.getElementById('pngBtn');
   var printBtn = document.getElementById('printBtn');
@@ -167,6 +197,8 @@
   var lblPhoto = document.getElementById('lblPhoto');
   var lblVollee = document.getElementById('lblVollee');
   var scanMode = 'photo'; /* 'photo' = arrêt auto après capture (PAR DÉFAUT) | 'vollee' = scan continu */
+  var scanFmt = 'auto'; /* type de code recherché : 'auto' ou QR_CODE/EAN_13/EAN_8/UPC_A/CODE_128/CODE_39/ITF/DATA_MATRIX */
+  var pendingNote = ''; /* message affiché sous le code détecté (réparation, avertissement) */
   var LS_KEY = 'scanregen_state_v1';
   var torchOn = false, torchMode = 'auto', torchSupported = false; /* lampe flash : allumée ? + mode choisi (on/off/auto) + disponible ? */
 
@@ -175,7 +207,8 @@
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
         lastResult: lastResult, mode: mode, bc: bcFormat.value,
-        hist: hist.slice(0, 30), scanMode: scanMode, torch: torchMode
+        hist: hist.slice(0, 30), scanMode: scanMode, torch: torchMode,
+        sf: scanFmt, gf: genFormat.value
       }));
     } catch (e) {}
   }
@@ -191,6 +224,8 @@
         if (bcFormat.options[i].value === s.bc) { bcFormat.selectedIndex = i; break; }
       if (s.mode === 'qr' || s.mode === 'bc') mode = s.mode;
       if (s.lastResult) lastResult = s.lastResult;
+      if (s.sf) { scanFmt = s.sf; scanFormatSel.value = s.sf; }
+      if (s.gf) { genFormat.value = s.gf; }
     } catch (e) {}
   }
   function updateModeUI() {
@@ -207,12 +242,125 @@
       : 'Mode scan à la volée : la caméra continue et enchaîne les scans automatiquement.';
   });
 
+  /* ===== OCR : LIRE LES CHIFFRES ET LETTRES IMPRIMÉS À CÔTÉ DU CODE =====
+     (comme le numéro écrit à côté d'un DataMatrix sur un timbre ou un recommandé).
+     Moteur Tesseract.js : fonctionne sur l'appareil, rien n'est envoyé sur Internet.
+     La 1re lecture nécessite Internet (téléchargement du moteur), ensuite en cache. */
+  var ocrBtn = document.getElementById('ocrBtn');
+  var ocrBusy = false, ocrEnginePromise = null;
+
+  function ocrAvailable() { return typeof window.Tesseract !== 'undefined'; }
+  function getOcrEngine() {
+    if (!ocrAvailable()) return null;
+    if (!ocrEnginePromise) {
+      try { ocrEnginePromise = window.Tesseract.createWorker('eng', 1, { logger: function () {} }); }
+      catch (e) { ocrEnginePromise = null; }
+    }
+    return ocrEnginePromise;
+  }
+
+  /* Prépare une image (canvas) lisible pour l'OCR : niveaux de gris renforcés, gros contraste */
+  function ocrPrepareCanvas(src) {
+    var w = src.videoWidth || src.naturalWidth || src.width;
+    var h = src.videoHeight || src.naturalHeight || src.height;
+    if (!w || !h) return null;
+    var scale = Math.min(2, Math.max(1, 1400 / Math.max(w, h)));
+    var c = document.createElement('canvas');
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    try {
+      var d = ctx.getImageData(0, 0, c.width, c.height);
+      for (var i = 0; i < d.data.length; i += 4) {
+        var g = (d.data[i] * 0.3 + d.data[i + 1] * 0.59 + d.data[i + 2] * 0.11);
+        var v = g < 110 ? 0 : (g > 170 ? 255 : g);
+        d.data[i] = d.data[i + 1] = d.data[i + 2] = v;
+      }
+      ctx.putImageData(d, 0, 0);
+    } catch (e) {}
+    return c;
+  }
+
+  async function ocrReadText(src) {
+    if (!ocrAvailable()) return null;
+    var c = ocrPrepareCanvas(src);
+    if (!c) return null;
+    try {
+      var worker = await getOcrEngine();
+      if (!worker) return null;
+      var res = await worker.recognize(c);
+      return (res && res.data && res.data.text) ? res.data.text : null;
+    } catch (e) { return null; }
+  }
+
+  /* Extrait les numéros/lettres candidats du texte imprimé.
+     Exemples reconnus : 1A 123 456 789 0, RR123456789FR, 5901234123457, 8H KLMN 12345 */
+  function ocrCandidates(text) {
+    if (!text) return [];
+    var t = text.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ');
+    var seen = {}, out = [];
+    function push(v) {
+      if (v && v.replace(/\D/g, '').length >= 7 && !seen[v]) { seen[v] = 1; out.push(v); }
+    }
+    /* 1) formats postaux : 2 lettres + 9 chiffres (+ 2 lettres), ex. RR123456789FR */
+    var postal = t.match(/(^|[^A-Z])([A-Z]{2}\s?\d{3}\s?\d{3}\s?\d{3}(\s?[A-Z]{2})?)(?![A-Z0-9])/g) || [];
+    postal.forEach(function (m) { push(m.replace(/[^A-Z0-9]/g, '')); });
+    /* 2) étiquettes colis : 1A 123 456 789 0 (chiffre+lettre ou lettre+chiffre) */
+    var parcel = t.match(/(^|[^A-Z0-9])(\d[A-Z]|[A-Z]\d)\s?\d{3}\s?\d{3}\s?\d{3}(\s?\d)?(?![0-9])/g) || [];
+    parcel.forEach(function (m) { push(m.replace(/[^A-Z0-9]/g, '')); });
+    /* 3) suites alphanumériques assez longues, sans espace */
+    var alnum = t.match(/[A-Z0-9]{8,20}/g) || [];
+    alnum.forEach(function (m) { push(m); });
+    /* 4) suites de chiffres éventuellement espacées */
+    var digits = t.match(/\d[\d ]{9,20}\d/g) || [];
+    digits.forEach(function (m) { push(m.replace(/\s+/g, '')); });
+    /* les plus complets d'abord, et on retire ceux entièrement contenus dans un autre */
+    out.sort(function (a, b) { return b.length - a.length; });
+    var final = [];
+    out.forEach(function (c) {
+      var isSub = final.some(function (f) { return f.indexOf(c) !== -1 || c.indexOf(f) !== -1; });
+      if (!isSub) final.push(c);
+    });
+    return final.slice(0, 6);
+  }
+
+  /* Concordance entre le contenu du code lu et le texte imprimé à côté :
+     renvoie 'ok' | 'ecart' | 'inconnu' (texte illisible ou absent) */
+  function ocrConcordance(codeValue, ocrText) {
+    if (!ocrText) return 'inconnu';
+    var cands = ocrCandidates(ocrText);
+    if (!cands.length) return 'inconnu';
+    var norm = function (s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+    var digits = function (s) { return String(s || '').replace(/\D/g, ''); };
+    var target = norm(codeValue), tdig = digits(codeValue);
+    for (var i = 0; i < cands.length; i++) {
+      var c = norm(cands[i]);
+      if (c === target) return 'ok';
+      if (digits(c).length >= 10 && tdig.length >= 10 && digits(c).indexOf(tdig) !== -1) return 'ok';
+      if (digits(c).length >= 10 && tdig.length >= 10 && tdig.indexOf(digits(c)) !== -1) return 'ok';
+    }
+    return 'ecart';
+  }
+
+  /* ===== TYPE DE CODE RECHERCHÉ : ciblage pour améliorer la reconnaissance ===== */
+  scanFormatSel.addEventListener('change', function () {
+    scanFmt = scanFormatSel.value;
+    detector = null; mfr = null; /* les moteurs seront reconstruits avec le format choisi */
+    statusEl.className = 'hint';
+    statusEl.textContent = scanFmt === 'auto'
+      ? 'Détection automatique : tous les types de codes sont recherchés.'
+      : 'Recherche ciblée : ' + scanFormatSel.options[scanFormatSel.selectedIndex].text + '. Visez le code.';
+    saveState();
+  });
+
   function updateLibStatus() {
     var el = document.getElementById('libStatus');
     if (!el) return;
     var zx = ('ZXing' in window || 'BarcodeDetector' in window);
+    var ocr = ocrAvailable();
     el.textContent = 'Génération : ✓ 100% intégrée (hors-ligne) | Lecture photo : ' +
-      (zx ? '✓' : '✗ (rechargez une fois avec Internet)');
+      (zx ? '✓' : '✗ (rechargez une fois avec Internet)') +
+      ' | Lecture du texte imprimé (OCR) : ' + (ocr ? '✓ (1re utilisation avec Internet)' : '✗ (rechargez une fois avec Internet)');
   }
   updateLibStatus();
 
@@ -276,15 +424,27 @@
 
   /* ================= LECTURE (caméra / photo) ================= */
   var BD_FORMATS = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code','code_93','codabar','data_matrix','pdf417'];
+  function bdNames() {
+    if (scanFmt === 'auto') return BD_FORMATS;
+    var m = { QR_CODE: ['qr_code'], EAN_13: ['ean_13'], EAN_8: ['ean_8'], UPC_A: ['upc_a'],
+      CODE_128: ['code_128'], CODE_39: ['code_39'], ITF: ['itf'], DATA_MATRIX: ['data_matrix'] };
+    return m[scanFmt] || BD_FORMATS;
+  }
   function getDetector() {
     if (detector !== null || !('BarcodeDetector' in window)) return detector;
-    try { detector = new BarcodeDetector({ formats: BD_FORMATS }); } catch (e) { detector = null; }
+    try { detector = new BarcodeDetector({ formats: bdNames() }); } catch (e) {
+      try { detector = new BarcodeDetector({ formats: BD_FORMATS }); } catch (e2) { detector = null; }
+    }
     return detector;
   }
-  var zxCanvas = null, mfr = null, zxLoopId = null;
+  var zxCanvas = null, zxCanvas2 = null, mfr = null, zxLoopId = null;
   function getZxCanvas() {
     if (!zxCanvas) zxCanvas = document.createElement('canvas');
     return zxCanvas;
+  }
+  function getZxCanvas2() {
+    if (!zxCanvas2) zxCanvas2 = document.createElement('canvas');
+    return zxCanvas2;
   }
   function fmtName(f) {
     if (!window.ZXing) return '' + f;
@@ -295,11 +455,17 @@
     if (mfr || !window.ZXing) return mfr;
     try {
       var BF = ZXing.BarcodeFormat;
+      var fmts;
+      if (scanFmt === 'auto') {
+        fmts = [BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.UPC_E, BF.CODE_128, BF.CODE_39,
+          BF.CODE_93, BF.ITF, BF.QR_CODE, BF.CODABAR, BF.DATA_MATRIX, BF.PDF_417];
+      } else {
+        var M = { QR_CODE: BF.QR_CODE, EAN_13: BF.EAN_13, EAN_8: BF.EAN_8, UPC_A: BF.UPC_A,
+          CODE_128: BF.CODE_128, CODE_39: BF.CODE_39, ITF: BF.ITF, DATA_MATRIX: BF.DATA_MATRIX };
+        fmts = [M[scanFmt] || BF.CODE_128];
+      }
       var hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        BF.EAN_13, BF.EAN_8, BF.UPC_A, BF.UPC_E, BF.CODE_128, BF.CODE_39,
-        BF.CODE_93, BF.ITF, BF.QR_CODE, BF.CODABAR, BF.DATA_MATRIX, BF.PDF_417
-      ]);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
       mfr = new ZXing.MultiFormatReader();
       mfr.setHints(hints);
@@ -310,7 +476,8 @@
     var r = getReader().decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(ls)));
     return { text: r.getText(), format: fmtName(r.getBarcodeFormat()) };
   }
-  /* Décode une image/video dessinée dans un canvas — API 0.21 : MultiFormatReader + LuminanceSource */
+  /* Décode une image/video dessinée dans un canvas — API 0.21 : MultiFormatReader + LuminanceSource.
+     Si le code est coupé ou trop petit, on retente en zoomant sur le centre (×1,5 puis ×2,2). */
   function zxDecodeElement(el) {
     if (!window.ZXing || !getReader()) return null;
     var w = el.videoWidth || el.naturalWidth || el.width;
@@ -324,6 +491,20 @@
     var ls = new ZXing.HTMLCanvasElementLuminanceSource(c);
     try { return zxDecodeLs(ls); } catch (e1) {}
     try { return zxDecodeLs(ls.rotateCounterClockwise()); } catch (e2) {}
+    /* recadrages rapprochés : aident pour un code partiel, une photo petite ou un code mal cadré */
+    var tries = [[0.66, 1.5], [0.45, 2.2]];
+    for (var t = 0; t < tries.length; t++) {
+      var frac = tries[t][0], sc = tries[t][1];
+      var rw = Math.max(1, Math.round(cw * frac)), rh = Math.max(1, Math.round(ch * frac));
+      var ox = Math.round((cw - rw) / 2), oy = Math.round((ch - rh) / 2);
+      var nw = Math.max(1, Math.min(1200, Math.round(rw * sc)));
+      var nh = Math.max(1, Math.min(1200, Math.round(rh * sc)));
+      var c2 = getZxCanvas2(); c2.width = nw; c2.height = nh;
+      var ctx2 = c2.getContext('2d', { willReadFrequently: true });
+      ctx2.imageSmoothingEnabled = true;
+      ctx2.drawImage(c, ox, oy, rw, rh, 0, 0, nw, nh);
+      try { return zxDecodeLs(new ZXing.HTMLCanvasElementLuminanceSource(c2)); } catch (e3) {}
+    }
     return null;
   }
 
@@ -332,6 +513,7 @@
     if (rafId) cancelAnimationFrame(rafId);
     if (zxLoopId) { clearTimeout(zxLoopId); zxLoopId = null; }
     updateFlashUI();
+    ocrBtn.style.display = 'none';
     if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
     video.srcObject = null;
     startBtn.textContent = '▶︎ Démarrer la caméra';
@@ -455,6 +637,7 @@
       if (torchSupported && torchMode === 'on') setTorch(true);
       else if (torchSupported && torchMode === 'auto') startAutoTick();
       updateFlashUI();
+      ocrBtn.style.display = '';
       var bd = getDetector();
       if (bd) tick();
       else if (window.ZXing) zxTick();
@@ -469,10 +652,48 @@
     }
   }
 
+  /* Bouton OCR : lit le numéro imprimé à côté du code, sur l'image actuelle de la caméra */
+  ocrBtn.addEventListener('click', async function () {
+    if (ocrBusy || !running) return;
+    if (!ocrAvailable()) {
+      statusEl.className = 'hint err';
+      statusEl.textContent = 'Lecture du texte non chargée : rechargez la page une fois avec Internet, puis réessayez.';
+      return;
+    }
+    ocrBusy = true;
+    statusEl.className = 'hint';
+    statusEl.textContent = '🔎 Lecture des chiffres et lettres écrits à côté…';
+    var txt = await ocrReadText(video);
+    ocrBusy = false;
+    var cands = ocrCandidates(txt);
+    if (!cands.length) {
+      statusEl.className = 'hint err';
+      statusEl.textContent = 'Aucun numéro lisible sur le texte autour du code. Rapprochez-vous du texte imprimé et réessayez.';
+      return;
+    }
+    if (scanMode === 'photo' && running) {
+      stopScan();
+      statusEl.className = 'hint';
+      statusEl.textContent = '✅ Numéro lu sur le texte imprimé — caméra arrêtée (mode photo unique).';
+    }
+    saveHistory(cands[0], 'TEXTE');
+    pendingNote = '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible pour la caméra). Vérifiez-le avant usage.';
+    openResult(cands[0], 'TEXTE');
+  });
+
   function tick() {
     if (!running) return;
     getDetector().detect(video).then(function (codes) {
-      if (codes && codes.length > 0) onDetected(codes[0].rawValue, '' + codes[0].format);
+      if (codes && codes.length > 0) {
+        /* parmi les codes vus, on privilégie celui dont la clé de contrôle est correcte */
+        var pick = codes[0];
+        for (var ci = 0; ci < codes.length; ci++) {
+          var mappedCi = FORMAT_MAP['' + codes[ci].format];
+          var chkCi = mappedCi ? checkValue(codes[ci].rawValue, mappedCi) : null;
+          if (chkCi && chkCi.ok) { pick = codes[ci]; break; }
+        }
+        onDetected(pick.rawValue, '' + pick.format);
+      }
       rafId = requestAnimationFrame(tick);
     }).catch(function () { rafId = requestAnimationFrame(tick); });
   }
@@ -487,8 +708,79 @@
     zxLoopId = setTimeout(zxTick, 250);
   }
 
-  function onDetected(value, format) {
-    if (!value) return;
+  /* ===== CLÉ DE CONTRÔLE : VÉRIFIER, COMPLÉTER ET COMBLER LE MANQUE =====
+     Beaucoup de codes-barres (EAN-13, EAN-8, UPC, ITF-14) finissent par une « clé »
+     calculée à partir des autres chiffres. Si la lecture capte mal le code :
+     - un chiffre manquant (clé absente) → il est recalculé automatiquement ;
+     - un chiffre mal lu → la clé le détecte, et les lectures voisines de la caméra
+       servent à recomposer le bon chiffre (vote position par position) ;
+     - impossible de trancher → le code est affiché avec un avertissement clair. */
+  function fmtOk(v, fmt) {
+    if (fmt === 'EAN13') return /^\d{13}$/.test(v) && eanCheckDigit(v.slice(0, 12)) === v[12];
+    if (fmt === 'EAN8') return /^\d{8}$/.test(v) && eanCheckDigit(v.slice(0, 7)) === v[7];
+    if (fmt === 'UPC') return /^\d{12}$/.test(v) && eanUpcCheck(v.slice(0, 11)) === v[11];
+    if (fmt === 'ITF14') return /^\d{14}$/.test(v) && eanUpcCheck13(v.slice(0, 13)) === v[13];
+    return true;
+  }
+  /* Note : une clé de contrôle permet de DÉTECTER un chiffre erroné, mais pas de
+     savoir où il se trouve : toute position pourrait être « corrigée ». La vraie
+     réparation fiable utilise les lectures voisines (vote ci-dessous). */
+  function checkValue(value, fmt) {
+    if (fmt !== 'EAN13' && fmt !== 'EAN8' && fmt !== 'UPC' && fmt !== 'ITF14') return null;
+    var v = value.replace(/\D/g, '');
+    if (fmt === 'EAN13') {
+      if (v.length === 12) return { ok: true, value: v + eanCheckDigit(v), note: '🔧 Chiffre manquant : la clé de contrôle a été recalculée automatiquement.' };
+      if (v.length === 13) return fmtOk(v, 'EAN13') ? { ok: true, value: v } : { ok: false, value: v };
+      return null;
+    }
+    if (fmt === 'EAN8') {
+      if (v.length === 7) return { ok: true, value: v + eanCheckDigit(v), note: '🔧 Chiffre manquant : la clé de contrôle a été recalculée automatiquement.' };
+      if (v.length === 8) return fmtOk(v, 'EAN8') ? { ok: true, value: v } : { ok: false, value: v };
+      return null;
+    }
+    if (fmt === 'UPC') {
+      if (v.length === 11) return { ok: true, value: v + eanUpcCheck(v), note: '🔧 Chiffre manquant : la clé de contrôle a été recalculée automatiquement.' };
+      if (v.length === 12) return fmtOk(v, 'UPC') ? { ok: true, value: v } : { ok: false, value: v };
+      return null;
+    }
+    if (fmt === 'ITF14') {
+      if (v.length === 13) return { ok: true, value: v + eanUpcCheck13(v), note: '🔧 Chiffre manquant : la clé de contrôle a été recalculée automatiquement.' };
+      if (v.length === 14) return fmtOk(v, 'ITF14') ? { ok: true, value: v } : { ok: false, value: v };
+      return null;
+    }
+    return null;
+  }
+
+  /* ===== LECTURES VOISINES : si la clé ne colle pas, on mémorise chaque lecture
+     de la caméra et on recompose le code le plus probable (chiffre le plus vu
+     à chaque position), puis on revérifie la clé. ===== */
+  var candPool = [], candTimer = null, candFmt = null;
+  function resetCandidates() { candPool = []; if (candTimer) { clearTimeout(candTimer); candTimer = null; } }
+  function majorityVote() {
+    if (!candPool.length) return null;
+    var L = candPool[0].v.length, out = '';
+    for (var p = 0; p < L; p++) {
+      var cnt = {}, bch = '', bn = 0;
+      for (var i = 0; i < candPool.length; i++) {
+        var ch = candPool[i].v[p];
+        cnt[ch] = (cnt[ch] || 0) + 1;
+      }
+      for (var k in cnt) if (cnt[k] > bn) { bn = cnt[k]; bch = k; }
+      out += bch;
+    }
+    return out;
+  }
+  function resolveCandidates() {
+    var pool = candPool, fmt = candFmt;
+    resetCandidates();
+    if (!pool.length || !fmt) return;
+    var voted = majorityVote();
+    var chk = voted ? checkValue(voted, fmt.f) : null;
+    if (chk && chk.ok) acceptResult(chk.value, fmt.raw, chk.note || '🔧 Code recomposé à partir des lectures voisines, puis vérifié par la clé de contrôle.');
+    else if (voted) acceptResult(voted, fmt.raw, null);
+  }
+
+  function acceptResult(value, format, note) {
     var now = Date.now();
     if (lastVal === value && now - cooldown < 4000) return;
     lastVal = value; cooldown = now;
@@ -499,7 +791,26 @@
       statusEl.textContent = '✅ Code capturé — caméra arrêtée (mode photo unique). Relancez « Démarrer la caméra » pour un nouveau scan.';
     }
     saveHistory(value, format);
+    pendingNote = note || '';
     openResult(value, format);
+  }
+
+  function onDetected(value, format) {
+    if (!value) return;
+    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null);
+    var chk = (mapped && mapped !== 'QR_CODE') ? checkValue(value, mapped) : null;
+    if (chk && chk.ok) { resetCandidates(); acceptResult(chk.value, format, chk.note); return; }
+    if (chk && !chk.ok && running) {
+      /* lecture douteuse : on garde les numéros de cette lecture et on compare
+         avec les captures voisines pour combler le manque */
+      candPool.push({ v: chk.value });
+      candFmt = { f: mapped, raw: format };
+      if (!candTimer) candTimer = setTimeout(resolveCandidates, 1200);
+      if (candPool.length >= 4) resolveCandidates();
+      return;
+    }
+    resetCandidates();
+    acceptResult(value, format, null);
   }
 
   /* ================= RÉSULTAT / AFFICHAGE ================= */
@@ -509,17 +820,27 @@
     code_128:'CODE128', code_39:'CODE39', itf:'ITF14', itf_14:'ITF14' };
 
   function openResult(value, format) {
+    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null);
+    var digits0 = value.replace(/\D/g, '');
+    if (!mapped && digits0.length >= 7 && digits0.length <= 14 && digits0 === value) {
+      mapped = digits0.length <= 8 ? 'EAN8' : (digits0.length === 14 ? 'ITF14' : 'EAN13');
+    }
+    /* vérification / réparation par la clé de contrôle avant d'afficher */
+    var note = pendingNote || ''; pendingNote = '';
+    if (mapped && mapped !== 'QR_CODE') {
+      var chk = checkValue(value, mapped);
+      if (chk) {
+        if (chk.ok) { value = chk.value; if (chk.note) note = chk.note; }
+        else if (!note) note = '⚠️ Clé de contrôle incorrecte : un chiffre semble mal lu. Corrigez-le dans la case de saisie, puis touchez « Régénérer avec cette valeur ».';
+      }
+    }
     lastResult = value;
     valEl.textContent = value;
     editVal.value = value;
-    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null);
-    var digits = value.replace(/\D/g, '');
+    repairNote.style.display = note ? '' : 'none';
+    repairNote.textContent = note;
     if (mapped === 'QR_CODE') { mode = 'qr'; }
     else if (mapped) { mode = 'bc'; }
-    else if (digits.length >= 7 && digits.length <= 14 && digits === value) {
-      mapped = digits.length <= 8 ? 'EAN8' : (digits.length === 14 ? 'ITF14' : 'EAN13');
-      mode = 'bc';
-    }
     if (mapped && mapped !== 'QR_CODE') {
       for (var i = 0; i < bcFormat.options.length; i++) {
         if (bcFormat.options[i].value === mapped) { bcFormat.selectedIndex = i; break; }
@@ -801,6 +1122,18 @@
       seq = seq.concat([1], char39('*'));
       return elementsSvg(seq, val39, true);
     }
+    if (format === 'ITF') {
+      var vI = value.replace(/\D/g, '');
+      if (vI.length < 2 || vI.length % 2 !== 0) return { err: 'ITF 2/5 : il faut un nombre pair de chiffres (ex. 12345678).' };
+      var ITFD0 = ['00110','10001','01001','11000','00101','10100','01100','00011','10010','01010'];
+      var seqI = [1, 1, 1, 1];
+      for (var pI = 0; pI < vI.length; pI += 2) {
+        var bI = ITFD0[Number(vI[pI])], sI = ITFD0[Number(vI[pI + 1])];
+        for (var qI = 0; qI < 5; qI++) { seqI.push(bI[qI] === '1' ? 3 : 1); seqI.push(sI[qI] === '1' ? 3 : 1); }
+      }
+      seqI.push(3, 1, 1);
+      return elementsSvg(seqI, vI, true);
+    }
     if (format === 'ITF14') {
       var v14 = value.replace(/\D/g, '');
       if (v14.length === 13) v14 = v14 + eanUpcCheck13(v14);
@@ -957,18 +1290,76 @@
         statusEl.textContent = msg;
         statusEl.className = ok ? 'hint' : 'hint err';
       }
+      /* après un décodage réussi : vérifie la CONCORDANCE avec le texte imprimé à côté */
+      function foundCode(value, format) {
+        finish(true, 'Code trouvé ✓');
+        onDetected(value, format);
+        if (!ocrAvailable()) return;
+        /* OCR en tâche de fond : ajoute ✓ (concordance) ou ⚠️ (écart) sous le numéro */
+        ocrReadText(img).then(function (txt) {
+          var cc = ocrConcordance(value, txt);
+          if (cc === 'ok') {
+            repairNote.style.display = '';
+            repairNote.textContent = '✅ Concordance vérifiée : le texte imprimé à côté correspond bien au contenu du code.';
+          } else if (cc === 'ecart') {
+            repairNote.style.display = '';
+            repairNote.textContent = '⚠️ Écart entre le code et le texte imprimé à côté : vérifiez le numéro avant de l’utiliser.';
+          }
+        });
+      }
+      /* si le code est illisible : récupère le numéro imprimé À CÔTÉ du code (timbre, recommandé…) */
+      function noCode() {
+        if (!ocrAvailable()) {
+          finish(false, 'Aucun code détecté sur cette photo, et la lecture du texte n’est pas chargée (rechargez une fois avec Internet).');
+          return;
+        }
+        finish(true, 'Code illisible — lecture du numéro écrit à côté…');
+        statusEl.className = 'hint';
+        statusEl.textContent = '🔎 Code illisible — lecture des chiffres et lettres écrits à côté…';
+        ocrReadText(img).then(function (txt) {
+          var cands = ocrCandidates(txt);
+          if (cands.length) {
+            statusEl.textContent = '✅ Code illisible, mais le numéro écrit à côté a été lu.';
+            saveHistory(cands[0], 'TEXTE');
+            pendingNote = '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible). Vérifiez-le avant usage.';
+            openResult(cands[0], 'TEXTE');
+          } else {
+            statusEl.className = 'hint err';
+            statusEl.textContent = 'Aucun code détecté et aucun numéro lisible à côté. Rapprochez-vous du code ET du texte imprimé, photo nette et bien éclairée.';
+          }
+        });
+      }
       var bd = getDetector();
       if (bd) {
         bd.detect(img).then(function (codes) {
           if (codes && codes.length > 0) {
-            finish(true, 'Code trouvé ✓');
-            onDetected(codes[0].rawValue, '' + codes[0].format);
-          } else finish(false, 'Aucun code détecté sur cette photo. Rapprochez-vous, assurez-vous que le code est net et bien éclairé.');
-        }).catch(function () { finish(false, 'Analyse impossible. Réessayez.'); });
+            /* s'il y a plusieurs codes, on privilégie celui dont la clé de contrôle est correcte */
+            var pick = codes[0];
+            for (var ci = 0; ci < codes.length; ci++) {
+              var mappedCi = FORMAT_MAP['' + codes[ci].format];
+              var chkCi = mappedCi ? checkValue(codes[ci].rawValue, mappedCi) : null;
+              if (chkCi && chkCi.ok) { pick = codes[ci]; break; }
+            }
+            foundCode(pick.rawValue, '' + pick.format);
+          } else if (window.ZXing) {
+            /* le premier moteur n'a rien vu : on retente en zoomant sur le centre */
+            var rz = zxDecodeElement(img);
+            if (rz) foundCode(rz.text, rz.format);
+            else noCode();
+          } else {
+            noCode();
+          }
+        }).catch(function () {
+          if (window.ZXing) {
+            var rz2 = zxDecodeElement(img);
+            if (rz2) foundCode(rz2.text, rz2.format);
+            else noCode();
+          } else noCode();
+        });
       } else if (window.ZXing) {
         var r = zxDecodeElement(img);
-        if (r) { finish(true, 'Code trouvé ✓'); onDetected(r.text, r.format); }
-        else finish(false, 'Aucun code détecté sur cette photo. Rapprochez-vous, assurez-vous que le code est net et bien éclairé.');
+        if (r) foundCode(r.text, r.format);
+        else noCode();
       } else {
         finish(false, 'Moteur de lecture non chargé. Rechargez la page avec Internet.');
       }
@@ -1001,14 +1392,14 @@
     var v = genInput.value.trim();
     if (!v) { genInput.focus(); return; }
     if (bcMode) {
-      mode = 'bc'; bcFormat.value = 'CODE128';
+      mode = 'bc'; bcFormat.value = genFormat.value;
       tabBc.classList.add('active'); tabQr.classList.remove('active');
     } else {
       mode = 'qr';
       tabQr.classList.add('active'); tabBc.classList.remove('active');
     }
     lastResult = v; valEl.textContent = v; editVal.value = v;
-    saveHistory(v, bcMode ? 'CODE128' : 'QR');
+    saveHistory(v, bcMode ? genFormat.value : 'QR');
     resultEl.style.display = 'block';
     resultEl.scrollIntoView({ behavior: 'smooth' });
     renderOutput(); saveState();
