@@ -263,15 +263,27 @@
   }
 
   /* Prépare une image (canvas) lisible pour l'OCR : niveaux de gris renforcés, gros contraste */
-  function ocrPrepareCanvas(src) {
-    var w = src.videoWidth || src.naturalWidth || src.width;
-    var h = src.videoHeight || src.naturalHeight || src.height;
-    if (!w || !h) return null;
-    var scale = Math.min(2, Math.max(1, 1400 / Math.max(w, h)));
+  /* Prépare une image pour l'OCR : gris renforcé + seuils.
+     zone facultative = { x, y, w, h } en fractions (0-1) pour recadrer
+     (ex. moitié basse de l'étiquette, là où les chiffres sont imprimés). */
+  function ocrPrepareCanvas(src, zone) {
+    var W = src.videoWidth || src.naturalWidth || src.width;
+    var H = src.videoHeight || src.naturalHeight || src.height;
+    if (!W || !H) return null;
+    var sx = 0, sy = 0, sw = W, sh = H;
+    if (zone) {
+      sx = Math.max(0, Math.min(W - 2, Math.round((zone.x || 0) * W)));
+      sy = Math.max(0, Math.min(H - 2, Math.round((zone.y || 0) * H)));
+      sw = Math.max(16, Math.min(W - sx, Math.round((zone.w || 1) * W)));
+      sh = Math.max(16, Math.min(H - sy, Math.round((zone.h || 1) * H)));
+    }
+    var scale = zone
+      ? Math.min(4, Math.max(2, 1400 / Math.max(sw, sh)))
+      : Math.min(2, Math.max(1, 1400 / Math.max(W, H)));
     var c = document.createElement('canvas');
-    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
     var ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(src, 0, 0, c.width, c.height);
+    ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
     try {
       var d = ctx.getImageData(0, 0, c.width, c.height);
       for (var i = 0; i < d.data.length; i += 4) {
@@ -294,6 +306,42 @@
       var res = await worker.recognize(c);
       return (res && res.data && res.data.text) ? res.data.text : null;
     } catch (e) { return null; }
+  }
+
+  /* OCR renforcé : on lit l'image ENTIRE puis, si rien n'est reconnu, on
+     réessaie sur des ZOOMS de l'étiquette (moitié basse où les chiffres sont
+     souvent imprimés, puis moitiés gauche/droite) : les petits numéros
+     deviennent assez gros pour être lus. Dernier essai : on ne garde que
+     les chiffres et MAJUSCULES pour aider la lecture. */
+  async function ocrReadTextDeep(src) {
+    if (!ocrAvailable()) return null;
+    var zones = [null, { x: 0, y: 0.45, w: 1, h: 0.55 }, { x: 0, y: 0, w: 0.5, h: 1 }, { x: 0.5, y: 0, w: 0.5, h: 1 }];
+    var texts = [];
+    for (var zi = 0; zi < zones.length; zi++) {
+      var c = ocrPrepareCanvas(src, zones[zi]);
+      if (!c) continue;
+      try {
+        var worker = await getOcrEngine();
+        if (!worker) return null;
+        var res = await worker.recognize(c);
+        if (res && res.data && res.data.text) {
+          texts.push(res.data.text);
+          var quick = ocrCandidates(res.data.text);
+          if (quick.length && quick[0].replace(/\D/g, '').length >= 10) break;
+        }
+      } catch (e) {}
+    }
+    try {
+      var worker2 = await getOcrEngine();
+      if (worker2 && worker2.setParameters) {
+        await worker2.setParameters({ tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ' });
+        var c2 = ocrPrepareCanvas(src, null);
+        var res2 = await worker2.recognize(c2);
+        await worker2.setParameters({ tessedit_char_whitelist: '' });
+        if (res2 && res2.data && res2.data.text) texts.push(res2.data.text);
+      }
+    } catch (e) {}
+    return texts.length ? texts.join('\n') : null;
   }
 
   /* Extrait les numéros/lettres candidats du texte imprimé.
@@ -863,7 +911,7 @@
     ocrBusy = true;
     statusEl.className = 'hint';
     statusEl.textContent = '🔎 Lecture des chiffres et lettres écrits à côté…';
-    var txt = await ocrReadText(video);
+    var txt = await ocrReadTextDeep(video);
     ocrBusy = false;
     var cands = ocrCandidates(txt);
     if (!cands.length) {
@@ -1670,7 +1718,7 @@
       function foundCode(value, format) {
         finish(true, 'Code trouvé ✓');
         if (!ocrAvailable()) { onDetected(value, format); return; }
-        ocrReadText(img).then(function (txt) {
+        ocrReadTextDeep(img).then(function (txt) {
           var rep = crossRepair(value, txt, format);
           if (rep) { acceptResult(rep.value, format, rep.note); return; }
           onDetected(value, format);
@@ -1693,7 +1741,7 @@
         finish(true, 'Code illisible — lecture du numéro écrit à côté…');
         statusEl.className = 'hint';
         statusEl.textContent = '🔎 Code illisible — lecture des chiffres, lettres et symboles écrits à côté…';
-        ocrReadText(img).then(function (txt) {
+        ocrReadTextDeep(img).then(function (txt) {
           var cands = ocrCandidates(txt);
           if (cands.length) {
             var best = ocrBestCandidate(cands);
@@ -1703,7 +1751,7 @@
             openResult(best.v, ocrGuessFormat(best.v));
           } else {
             statusEl.className = 'hint err';
-            statusEl.textContent = 'Aucun code détecté et aucun numéro lisible à côté. Rapprochez-vous du code ET du texte imprimé, photo nette et bien éclairée.';
+            statusEl.textContent = 'Aucun code détecté et aucun numéro lisible à côté. Rapprochez-vous du code ET du texte imprimé, photo nette et bien éclairée. Sinon, tapez le numéro vous-même dans la carte « ✍️ Générer un code depuis un texte » en bas de page.';
           }
         });
       }
