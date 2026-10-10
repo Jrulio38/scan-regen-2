@@ -106,6 +106,7 @@
     <input type="text" id="genInput" placeholder="Tapez ici votre texte, URL ou code…" />
     <button id="genQrBtn">⚡ Générer un QR Code</button>
     <button class="sec" id="genBcBtn">⊢ Générer un code-barres (type choisi dessous)</button>
+    <button class="sec" id="genDmBtn">⬛ Générer un DataMatrix (suivi, timbres — max 44 caractères)</button>
     <select id="genFormat">
       <option value="CODE128">Code 128 (le plus universel)</option>
       <option value="EAN13">EAN-13 (13 chiffres, produits)</option>
@@ -123,12 +124,13 @@
     <div class="hint">Code détecté :</div>
     <div class="val" id="val"></div>
     <div class="hint" id="repairNote" style="display:none"></div>
-    <input type="text" id="editVal" placeholder="…ou saisissez un code à la main" />
+    <input type="text" id="editVal" placeholder="…ou saisissez un code à la main — ? = chiffre illisible (retrouvé automatiquement)" />
     <button class="sec" id="applyBtn">↻ Régénérer avec cette valeur</button>
 
     <div class="tabs">
       <button id="tabQr" class="active">QR Code</button>
       <button id="tabBc">Code-barres</button>
+      <button id="tabDm">DataMatrix</button>
     </div>
     <select id="bcFormat">
       <option value="CODE128">Code 128 (le plus universel)</option>
@@ -179,6 +181,7 @@
   var output = document.getElementById('output');
   var tabQr = document.getElementById('tabQr');
   var tabBc = document.getElementById('tabBc');
+  var tabDm = document.getElementById('tabDm');
   var bcFormat = document.getElementById('bcFormat');
   var genFormat = document.getElementById('genFormat');
   var scanFormatSel = document.getElementById('scanFormat');
@@ -191,7 +194,7 @@
   var closeBtn = document.getElementById('closeBtn');
 
   var stream = null, rafId = null, detector = null, running = false;
-  var mode = 'qr', lastResult = null, lastVal = null, cooldown = 0;
+  var mode = 'qr', lastResult = null, lastVal = null, cooldown = 0; /* mode : 'qr' | 'bc' | 'dm' */
   var hist = [];
   var modeSwitch = document.getElementById('modeSwitch');
   var lblPhoto = document.getElementById('lblPhoto');
@@ -222,7 +225,7 @@
       if (Array.isArray(s.hist)) hist = s.hist;
       if (s.bc) for (var i = 0; i < bcFormat.options.length; i++)
         if (bcFormat.options[i].value === s.bc) { bcFormat.selectedIndex = i; break; }
-      if (s.mode === 'qr' || s.mode === 'bc') mode = s.mode;
+      if (s.mode === 'qr' || s.mode === 'bc' || s.mode === 'dm') mode = s.mode;
       if (s.lastResult) lastResult = s.lastResult;
       if (s.sf) { scanFmt = s.sf; scanFormatSel.value = s.sf; }
       if (s.gf) { genFormat.value = s.gf; }
@@ -342,6 +345,90 @@
     return 'ecart';
   }
 
+  /* ===== RÉPARATION CROISÉE : quand le code lu est incomplet ou mal lu,
+     on le répare avec le texte imprimé à côté (OCR), à condition que le
+     candidat du texte passe la clé de contrôle ET soit très proche du
+     code lu (1 ou 2 chiffres d'écart seulement) — jamais de réparation au hasard. ===== */
+  function levD(a, b) { /* distance de Levenshtein */
+    var m = a.length, n = b.length;
+    if (m === 0) return n; if (n === 0) return m;
+    var prev = new Array(n + 1), cur = new Array(n + 1), i, j;
+    for (j = 0; j <= n; j++) prev[j] = j;
+    for (i = 1; i <= m; i++) {
+      cur[0] = i;
+      for (j = 1; j <= n; j++) {
+        var cost = (a[i - 1] === b[j - 1]) ? 0 : 1;
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      }
+      var tmp = prev; prev = cur; cur = tmp;
+    }
+    return prev[n];
+  }
+  function crossRepair(value, ocrText, format) {
+    if (!ocrText || !value) return null;
+    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE'
+      : (format === 'DATA_MATRIX' || format === 'data_matrix' ? 'DATA_MATRIX' : null));
+    var digits0 = String(value).replace(/\D/g, '');
+    if (!mapped && digits0.length >= 7 && digits0.length <= 14 && digits0 === value)
+      mapped = digits0.length <= 8 ? 'EAN8' : (digits0.length === 14 ? 'ITF14' : 'EAN13');
+    if (mapped !== 'EAN13' && mapped !== 'EAN8' && mapped !== 'UPC' && mapped !== 'ITF14') return null;
+    /* si le code lu est déjà valide : rien à réparer, la concordance suffit */
+    var chkSelf = checkValue(value, mapped);
+    if (chkSelf && chkSelf.ok) return null;
+    var cands = ocrCandidates(ocrText);
+    var norm = function (s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+    for (var i = 0; i < cands.length; i++) {
+      var c = norm(cands[i]);
+      var chk = checkValue(c, mapped);
+      if (!chk || !chk.ok) continue;
+      var cd = c.replace(/\D/g, '');
+      /* mêmes longueurs, 1 ou 2 chiffres d'écart : le texte imprimé corrige le code mal lu */
+      if (cd.length === digits0.length && levD(cd, digits0) >= 1 && levD(cd, digits0) <= 2)
+        return { value: chk.value, note: '🔧 Code incomplet ou mal lu : réparé grâce au texte imprimé à côté (clé de contrôle vérifiée ✓).' };
+      /* le code lu est un morceau du numéro imprimé (partie manquante comblée) */
+      if (cd.length > digits0.length && cd.indexOf(digits0) !== -1 && digits0.length >= 8)
+        return { value: chk.value, note: '🔧 Parties manquantes comblées avec le texte imprimé à côté (clé de contrôle vérifiée ✓).' };
+    }
+    return null;
+  }
+
+  /* ===== COMPLÉTION MANUELLE : si un chiffre est illisible, l'utilisateur peut
+     mettre « ? » à sa place dans la case de saisie ; l'app trouve le chiffre qui
+     rend la clé de contrôle valide (EAN-13, EAN-8, UPC, ITF-14). ===== */
+  function completeWildcard(value) {
+    if (!value || value.indexOf('?') === -1) return null;
+    var v = value.toUpperCase();
+    var idx = v.indexOf('?');
+    if (v.indexOf('?', idx + 1) !== -1) return null; /* un seul « ? » à la fois */
+    var found = null;
+    for (var d = 0; d <= 9; d++) {
+      var t = v.replace('?', String(d));
+      var dd = t.replace(/\D/g, '');
+      var ok = false;
+      if (dd.length === 13 && dd === t) ok = fmtOk(dd, 'EAN13');
+      else if (dd.length === 8 && dd === t) ok = fmtOk(dd, 'EAN8');
+      else if (dd.length === 12 && dd === t) ok = fmtOk(dd, 'UPC');
+      else if (dd.length === 14 && dd === t) ok = fmtOk(dd, 'ITF14');
+      if (ok) { if (found) return null; found = t; } /* plusieurs solutions → ambigu, on ne devine pas */
+    }
+    if (found) return { value: found, note: '🔧 Chiffre manquant retrouvé automatiquement grâce à la clé de contrôle ✓.' };
+    return null;
+  }
+
+  /* Choisit le meilleur candidat OCR : celui dont la clé de contrôle est valide passe en premier */
+  function ocrBestCandidate(cands) {
+    if (!cands || !cands.length) return null;
+    var fmts = [['EAN13', 13], ['EAN8', 8], ['UPC', 12], ['ITF14', 14]];
+    for (var f = 0; f < fmts.length; f++) {
+      for (var i = 0; i < cands.length; i++) {
+        var d = String(cands[i]).replace(/\D/g, '');
+        if (d.length === fmts[f][1] && d === cands[i] && fmtOk(d, fmts[f][0]))
+          return { v: d, note: '✅ Numéro lu à côté du code — clé de contrôle vérifiée ✓.' };
+      }
+    }
+    return { v: cands[0], note: null };
+  }
+
   /* ===== TYPE DE CODE RECHERCHÉ : ciblage pour améliorer la reconnaissance ===== */
   scanFormatSel.addEventListener('change', function () {
     scanFmt = scanFormatSel.value;
@@ -408,6 +495,7 @@
     editVal.value = lastResult;
     tabQr.classList.toggle('active', mode === 'qr');
     tabBc.classList.toggle('active', mode === 'bc');
+    tabDm.classList.toggle('active', mode === 'dm');
     resultEl.style.display = 'block';
     renderOutput();
   }
@@ -476,9 +564,56 @@
     var r = getReader().decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(ls)));
     return { text: r.getText(), format: fmtName(r.getBarcodeFormat()) };
   }
+  /* ===== FILTRE COULEURS : gomme les gribouillis de stylo, tampons et feutres colorés.
+     Un vrai code (photocopié ou imprimé) est noir / gris / blanc : ses pixels sont neutres
+     (rouge ≈ vert ≈ bleu). Les traits de feutre BLEU, ROUGE, VERT sont saturés :
+     on les érase (→ blanc) ou on les garde seuls (→ noir si le code lui-même est coloré).
+     Ensuite on étire le contraste des niveaux de gris restants. ===== */
+  function colorFilterCanvas(src, coloredTo) {
+    var w = src.videoWidth || src.naturalWidth || src.width;
+    var h = src.videoHeight || src.naturalHeight || src.height;
+    if (!w || !h) return null;
+    var scale = Math.min(1, 1200 / Math.max(w, h));
+    var c = getZxCanvas(); c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    var img = ctx.getImageData(0, 0, c.width, c.height);
+    var d = img.data;
+    var mins = [], i, mn, mx, sat, g, mnAll = 255, mxAll = 0;
+    for (i = 0; i < d.length; i += 4) {
+      mn = Math.min(d[i], d[i + 1], d[i + 2]);
+      mx = Math.max(d[i], d[i + 1], d[i + 2]);
+      sat = mx - mn;
+      if (sat > 60) {
+        /* pixel coloré : feutre, stylo, tampon → effacé (ou gardé seul) */
+        if (coloredTo === 'white') { d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = 255; mins.push(255); }
+        else { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 255; mins.push(0); }
+      } else {
+        g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+        d[i] = g; d[i + 1] = g; d[i + 2] = g; d[i + 3] = 255;
+        mins.push(g);
+        if (g < mnAll) mnAll = g;
+        if (g > mxAll) mxAll = g;
+      }
+    }
+    /* étirement de contraste sur les pixels neutres seulement (les colorés restent fixés) */
+    var range = mxAll - mnAll;
+    for (i = 0, p = 0; i < d.length; i += 4, p++) {
+      var g2 = mins[p];
+      if (g2 !== 0 && g2 !== 255) {
+        g2 = range > 30 ? Math.round(255 * (g2 - mnAll) / range) : (g2 < 128 ? 0 : 255);
+        d[i] = g2; d[i + 1] = g2; d[i + 2] = g2;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
   /* Décode une image/video dessinée dans un canvas — API 0.21 : MultiFormatReader + LuminanceSource.
-     Si le code est coupé ou trop petit, on retente en zoomant sur le centre (×1,5 puis ×2,2). */
-  function zxDecodeElement(el) {
+     Si le code est coupé ou trop petit, on retente en zoomant sur le centre (×1,5 puis ×2,2).
+     Si aggressive=true, on retente après filtrage des couleurs (gomme les feutres/stylos colorés,
+     puis essaie aussi le code imprimé en couleur). */
+  function zxDecodeElement(el, aggressive) {
     if (!window.ZXing || !getReader()) return null;
     var w = el.videoWidth || el.naturalWidth || el.width;
     var h = el.videoHeight || el.naturalHeight || el.height;
@@ -504,6 +639,32 @@
       ctx2.imageSmoothingEnabled = true;
       ctx2.drawImage(c, ox, oy, rw, rh, 0, 0, nw, nh);
       try { return zxDecodeLs(new ZXing.HTMLCanvasElementLuminanceSource(c2)); } catch (e3) {}
+    }
+    /* mode agressif : filtre couleurs — gomme feutres/stylos colorés puis tente code coloré */
+    if (aggressive) {
+      var fc = colorFilterCanvas(el, 'white');
+      if (fc) {
+        var fls = new ZXing.HTMLCanvasElementLuminanceSource(fc);
+        try { return zxDecodeLs(fls); } catch (e4) {}
+        try { return zxDecodeLs(fls.rotateCounterClockwise()); } catch (e5) {}
+        var ft = [[0.66, 1.5]];
+        for (var ft2 = 0; ft2 < ft.length; ft2++) {
+          var ffrac = ft[ft2][0], fsc = ft[ft2][1];
+          var frw = Math.max(1, Math.round(fc.width * ffrac)), frh = Math.max(1, Math.round(fc.height * ffrac));
+          var fox = Math.round((fc.width - frw) / 2), foy = Math.round((fc.height - frh) / 2);
+          var fnw = Math.max(1, Math.min(1200, Math.round(frw * fsc)));
+          var fnh = Math.max(1, Math.min(1200, Math.round(frh * fsc)));
+          var fc2 = getZxCanvas2(); fc2.width = fnw; fc2.height = fnh;
+          var fctx2 = fc2.getContext('2d', { willReadFrequently: true });
+          fctx2.imageSmoothingEnabled = true;
+          fctx2.drawImage(fc, fox, foy, frw, frh, 0, 0, fnw, fnh);
+          try { return zxDecodeLs(new ZXing.HTMLCanvasElementLuminanceSource(fc2)); } catch (e6) {}
+        }
+      }
+      var fcb = colorFilterCanvas(el, 'black');
+      if (fcb) {
+        try { return zxDecodeLs(new ZXing.HTMLCanvasElementLuminanceSource(fcb)); } catch (e7) {}
+      }
     }
     return null;
   }
@@ -676,9 +837,10 @@
       statusEl.className = 'hint';
       statusEl.textContent = '✅ Numéro lu sur le texte imprimé — caméra arrêtée (mode photo unique).';
     }
-    saveHistory(cands[0], 'TEXTE');
-    pendingNote = '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible pour la caméra). Vérifiez-le avant usage.';
-    openResult(cands[0], 'TEXTE');
+    var best = ocrBestCandidate(cands);
+    saveHistory(best.v, 'TEXTE');
+    pendingNote = best.note || '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible pour la caméra). Vérifiez-le avant usage.';
+    openResult(best.v, 'TEXTE');
   });
 
   function tick() {
@@ -698,13 +860,18 @@
     }).catch(function () { rafId = requestAnimationFrame(tick); });
   }
 
-  /* Boucle de secours (ZXing) : capture une frame vidéo toutes les 250 ms et la décode via canvas */
+  /* Boucle de secours (ZXing) : capture une frame vidéo toutes les 250 ms et la décode via canvas.
+     Toutes les ~8 frames (2 s), on tente aussi le mode agressif avec filtre couleurs
+     (utile quand un stylo ou un tampon coloré recouvre le code). */
+  var zxTickCount = 0;
   function zxTick() {
     if (!running) return;
     try {
-      var r = zxDecodeElement(video);
+      var aggressive = (zxTickCount % 8 === 7);
+      var r = zxDecodeElement(video, aggressive);
       if (r) onDetected(r.text, r.format);
     } catch (e) {}
+    zxTickCount++;
     zxLoopId = setTimeout(zxTick, 250);
   }
 
@@ -820,14 +987,18 @@
     code_128:'CODE128', code_39:'CODE39', itf:'ITF14', itf_14:'ITF14' };
 
   function openResult(value, format) {
-    var mapped = FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null);
+    /* un « ? » dans la saisie = chiffre illisible → retrouvé par la clé de contrôle */
+    var cw = completeWildcard(value);
+    if (cw) { value = cw.value; pendingNote = cw.note; }
+    var mapped = (format === 'DATA_MATRIX' || format === 'data_matrix') ? 'DATA_MATRIX'
+      : (FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null));
     var digits0 = value.replace(/\D/g, '');
     if (!mapped && digits0.length >= 7 && digits0.length <= 14 && digits0 === value) {
       mapped = digits0.length <= 8 ? 'EAN8' : (digits0.length === 14 ? 'ITF14' : 'EAN13');
     }
     /* vérification / réparation par la clé de contrôle avant d'afficher */
     var note = pendingNote || ''; pendingNote = '';
-    if (mapped && mapped !== 'QR_CODE') {
+    if (mapped && mapped !== 'QR_CODE' && mapped !== 'DATA_MATRIX') {
       var chk = checkValue(value, mapped);
       if (chk) {
         if (chk.ok) { value = chk.value; if (chk.note) note = chk.note; }
@@ -840,14 +1011,16 @@
     repairNote.style.display = note ? '' : 'none';
     repairNote.textContent = note;
     if (mapped === 'QR_CODE') { mode = 'qr'; }
+    else if (mapped === 'DATA_MATRIX') { mode = 'dm'; }
     else if (mapped) { mode = 'bc'; }
-    if (mapped && mapped !== 'QR_CODE') {
+    if (mapped && mapped !== 'QR_CODE' && mapped !== 'DATA_MATRIX') {
       for (var i = 0; i < bcFormat.options.length; i++) {
         if (bcFormat.options[i].value === mapped) { bcFormat.selectedIndex = i; break; }
       }
     }
     tabQr.classList.toggle('active', mode === 'qr');
     tabBc.classList.toggle('active', mode === 'bc');
+    tabDm.classList.toggle('active', mode === 'dm');
     resultEl.style.display = 'block';
     resultEl.scrollIntoView({ behavior: 'smooth' });
     renderOutput();
@@ -962,6 +1135,155 @@
       var path = '';
       for (var y = 0; y < n; y++) for (var x = 0; x < n; x++)
         if (Q.M[y][x]) path += 'M' + ((x+mg)*cs) + ' ' + ((y+mg)*cs) + 'h' + cs + 'v' + cs + 'h-' + cs + 'z';
+      s += '<path d="' + path + '" fill="#000"/>';
+      s += '</svg>';
+      return s;
+    }
+    return { svg: svg };
+  })();
+
+  /* ================= GÉNÉRATEUR DATAMATRIX INTÉGRÉ (ECC 200) =================
+     Même principe que le QR : 100% intégré, fonctionne hors-ligne.
+     Algorithmes officiels du standard ISO/IEC 16022 : Reed-Solomon sur GF(256)
+     (polynôme 0x12D), placement des symboles en zigzag (annexe M.1), tailles
+     carrées 10×10 à 26×26 (jusqu'à 44 caractères). */
+  var BuiltinDM = (function () {
+    var EXP = new Array(512), LOG = new Array(256);
+    (function () { var x = 1;
+      for (var i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x12d; }
+      for (var j = 255; j < 512; j++) EXP[j] = EXP[j - 255]; })();
+    function gmul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]]; }
+    function buildGen(deg) {
+      var g = [1];
+      for (var i = 0; i < deg; i++) {
+        var ng = new Array(g.length + 1).fill(0);
+        for (var j = 0; j < g.length; j++) { ng[j] ^= g[j]; ng[j + 1] ^= gmul(g[j], EXP[i]); }
+        g = ng;
+      }
+      return g;
+    }
+    function rsEncode(data, ecLen) {
+      var gen = buildGen(ecLen), rem = data.concat(new Array(ecLen).fill(0));
+      for (var i = 0; i < data.length; i++) {
+        var f = rem[i];
+        if (f !== 0) for (var j = 0; j < gen.length; j++) rem[i + j] ^= gmul(gen[j], f);
+      }
+      return rem.slice(data.length);
+    }
+    /* tailles carrées ECC 200 : [caractères de données, codes de correction, taille utile, taille totale] */
+    var SIZES = [
+      [3, 5, 8, 10], [5, 7, 10, 12], [8, 10, 12, 14], [12, 12, 14, 16],
+      [18, 14, 16, 18], [22, 18, 18, 20], [30, 20, 20, 22], [36, 24, 22, 24], [44, 28, 24, 26]
+    ];
+    /* codage ASCII : paires de chiffres condensées sur 1 caractère, sinon valeur + 1, puis remplissage */
+    function encodeData(text, dataCap) {
+      var cw = [], i = 0;
+      while (i < text.length) {
+        var c1 = text[i], c2 = text[i + 1];
+        if (c2 !== undefined && c1 >= '0' && c1 <= '9' && c2 >= '0' && c2 <= '9') {
+          cw.push(Number(c1) * 10 + Number(c2) + 130); i += 2;
+        } else {
+          var code = text.charCodeAt(i);
+          if (code < 1 || code > 127) throw new Error('CARACTERE');
+          cw.push(code + 1); i += 1;
+        }
+      }
+      if (cw.length > dataCap) throw new Error('LONG');
+      if (cw.length < dataCap) cw.push(129);
+      var pad = 1;
+      while (cw.length < dataCap) {
+        var pr = ((149 * pad) % 253) + 1;
+        var t = 129 + pr; if (t > 254) t -= 254;
+        cw.push(t); pad++;
+      }
+      return cw;
+    }
+    /* placement des bits en zigzag (ISO 16022 annexe M.1) */
+    function place(codewords, numcols, numrows) {
+      var bits = new Array(numcols * numrows).fill(-1);
+      function setBit(col, row, v) { bits[row * numcols + col] = v ? 1 : 0; }
+      function noBit(col, row) { return bits[row * numcols + col] < 0; }
+      function module_(row, col, pos, bit) {
+        if (row < 0) { row += numrows; col += 4 - ((numrows + 4) % 8); }
+        if (col < 0) { col += numcols; row += 4 - ((numcols + 4) % 8); }
+        setBit(col, row, (codewords[pos] & (1 << (8 - bit))) !== 0);
+      }
+      function utah(row, col, pos) {
+        module_(row - 2, col - 2, pos, 1); module_(row - 2, col - 1, pos, 2);
+        module_(row - 1, col - 2, pos, 3); module_(row - 1, col - 1, pos, 4);
+        module_(row - 1, col, pos, 5); module_(row, col - 2, pos, 6);
+        module_(row, col - 1, pos, 7); module_(row, col, pos, 8);
+      }
+      function corner1(pos) {
+        module_(numrows - 1, 0, pos, 1); module_(numrows - 1, 1, pos, 2); module_(numrows - 1, 2, pos, 3);
+        module_(0, numcols - 2, pos, 4); module_(0, numcols - 1, pos, 5); module_(1, numcols - 1, pos, 6);
+        module_(2, numcols - 1, pos, 7); module_(3, numcols - 1, pos, 8);
+      }
+      function corner2(pos) {
+        module_(numrows - 3, 0, pos, 1); module_(numrows - 2, 0, pos, 2); module_(numrows - 1, 0, pos, 3);
+        module_(0, numcols - 4, pos, 4); module_(0, numcols - 3, pos, 5); module_(0, numcols - 2, pos, 6);
+        module_(0, numcols - 1, pos, 7); module_(1, numcols - 1, pos, 8);
+      }
+      function corner3(pos) {
+        module_(numrows - 3, 0, pos, 1); module_(numrows - 2, 0, pos, 2); module_(numrows - 1, 0, pos, 3);
+        module_(0, numcols - 2, pos, 4); module_(0, numcols - 1, pos, 5); module_(1, numcols - 1, pos, 6);
+        module_(2, numcols - 1, pos, 7); module_(3, numcols - 1, pos, 8);
+      }
+      function corner4(pos) {
+        module_(numrows - 1, 0, pos, 1); module_(numrows - 1, numcols - 1, pos, 2);
+        module_(0, numcols - 3, pos, 3); module_(0, numcols - 2, pos, 4); module_(0, numcols - 1, pos, 5);
+        module_(1, numcols - 3, pos, 6); module_(1, numcols - 2, pos, 7); module_(1, numcols - 1, pos, 8);
+      }
+      var pos = 0, row = 4, col = 0;
+      do {
+        if (row === numrows && col === 0) corner1(pos++);
+        if (row === numrows - 2 && col === 0 && numcols % 4 !== 0) corner2(pos++);
+        if (row === numrows - 2 && col === 0 && numcols % 8 === 4) corner3(pos++);
+        if (row === numrows + 4 && col === 2 && numcols % 8 === 0) corner4(pos++);
+        do {
+          if (row < numrows && col >= 0 && noBit(col, row)) utah(row, col, pos++);
+          row -= 2; col += 2;
+        } while (row >= 0 && col < numcols);
+        row++; col += 3;
+        do {
+          if (row >= 0 && col < numcols && noBit(col, row)) utah(row, col, pos++);
+          row += 2; col -= 2;
+        } while (row < numrows && col >= 0);
+        row += 3; col++;
+      } while (row < numrows || col < numcols);
+      if (noBit(numcols - 1, numrows - 1)) {
+        setBit(numcols - 1, numrows - 1, true);
+        setBit(numcols - 2, numrows - 2, true);
+      }
+      return bits;
+    }
+    function build(text) {
+      var si = null, dataCw = null;
+      for (var s = 0; s < SIZES.length; s++) {
+        try { dataCw = encodeData(text, SIZES[s][0]); si = SIZES[s]; break; }
+        catch (e) { if (e.message === 'CARACTERE') throw e; }
+      }
+      if (!dataCw) throw new Error('LONG');
+      var cw = dataCw.concat(rsEncode(dataCw, si[1]));
+      var bits = place(cw, si[2], si[2]);
+      var N = si[3], M = [], y, x;
+      for (y = 0; y < N; y++) M.push(new Array(N).fill(0));
+      /* motifs de bordure : gauche et bas pleins, horloge en haut (x pair) et à droite (y impair) */
+      for (y = 0; y < N; y++) { M[y][0] = 1; if (y % 2 === 1) M[y][N - 1] = 1; }
+      for (x = 0; x < N; x++) { M[N - 1][x] = 1; if (x % 2 === 0) M[0][x] = 1; }
+      for (y = 0; y < si[2]; y++)
+        for (x = 0; x < si[2]; x++)
+          M[y + 1][x + 1] = bits[y * si[2] + x];
+      return { N: N, M: M };
+    }
+    function svg(text, cs0, mg0) {
+      var D = build(text), N = D.N, cs = cs0 || 8, mg = mg0 || 4;
+      var size = (N + mg * 2) * cs;
+      var s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">';
+      s += '<rect width="100%" height="100%" fill="#fff"/>';
+      var path = '';
+      for (var y = 0; y < N; y++) for (var x = 0; x < N; x++)
+        if (D.M[y][x]) path += 'M' + ((x + mg) * cs) + ' ' + ((y + mg) * cs) + 'h' + cs + 'v' + cs + 'h-' + cs + 'z';
       s += '<path d="' + path + '" fill="#000"/>';
       s += '</svg>';
       return s;
@@ -1178,6 +1500,19 @@
           ? 'Texte trop long pour le QR intégré (max 53 caractères). Utilisez le code-barres.'
           : 'Impossible de générer le QR code.');
       }
+    } else if (mode === 'dm') {
+      var dmSvg = null, dmErr = '';
+      try { dmSvg = BuiltinDM.svg(value, 8, 4); }
+      catch (e) { dmErr = (e && e.message === 'LONG') ? 'LONG' : ((e && e.message === 'CARACTERE') ? 'CARACTERE' : String(e && e.message ? e.message : e)); }
+      if (dmSvg) {
+        var holderDm = document.createElement('div');
+        holderDm.innerHTML = dmSvg;
+        output.appendChild(holderDm);
+      } else {
+        showError(dmErr === 'LONG'
+          ? 'Texte trop long pour le DataMatrix intégré (max 44 caractères).'
+          : (dmErr === 'CARACTERE' ? 'Le DataMatrix intégré ne supporte que les caractères ASCII (sans accents).' : 'Impossible de générer le DataMatrix.'));
+      }
     } else {
       var res = builtInBarcode(value, bcFormat.value);
       if (typeof res === 'string') {
@@ -1240,7 +1575,7 @@
     if (!srcSvg || !lastResult) return;
     document.getElementById('printVal').textContent = lastResult;
     document.getElementById('printTitle').textContent =
-      mode === 'qr' ? 'QR Code régénéré' : 'Code-barres régénéré (' + bcFormat.options[bcFormat.selectedIndex].text + ')';
+      mode === 'qr' ? 'QR Code régénéré' : (mode === 'dm' ? 'DataMatrix régénéré' : 'Code-barres régénéré (' + bcFormat.options[bcFormat.selectedIndex].text + ')');
     var holder = document.getElementById('printCode');
     holder.innerHTML = '';
     var clone = srcSvg.cloneNode(true);
@@ -1290,13 +1625,15 @@
         statusEl.textContent = msg;
         statusEl.className = ok ? 'hint' : 'hint err';
       }
-      /* après un décodage réussi : vérifie la CONCORDANCE avec le texte imprimé à côté */
+      /* après un décodage réussi : CONCORDANCE avec le texte imprimé + RÉPARATION
+         si le code est incomplet ou mal lu mais que le texte imprimé est valide */
       function foundCode(value, format) {
         finish(true, 'Code trouvé ✓');
-        onDetected(value, format);
-        if (!ocrAvailable()) return;
-        /* OCR en tâche de fond : ajoute ✓ (concordance) ou ⚠️ (écart) sous le numéro */
+        if (!ocrAvailable()) { onDetected(value, format); return; }
         ocrReadText(img).then(function (txt) {
+          var rep = crossRepair(value, txt, format);
+          if (rep) { acceptResult(rep.value, format, rep.note); return; }
+          onDetected(value, format);
           var cc = ocrConcordance(value, txt);
           if (cc === 'ok') {
             repairNote.style.display = '';
@@ -1305,7 +1642,7 @@
             repairNote.style.display = '';
             repairNote.textContent = '⚠️ Écart entre le code et le texte imprimé à côté : vérifiez le numéro avant de l’utiliser.';
           }
-        });
+        }).catch(function () { onDetected(value, format); });
       }
       /* si le code est illisible : récupère le numéro imprimé À CÔTÉ du code (timbre, recommandé…) */
       function noCode() {
@@ -1319,10 +1656,11 @@
         ocrReadText(img).then(function (txt) {
           var cands = ocrCandidates(txt);
           if (cands.length) {
+            var best = ocrBestCandidate(cands);
             statusEl.textContent = '✅ Code illisible, mais le numéro écrit à côté a été lu.';
-            saveHistory(cands[0], 'TEXTE');
-            pendingNote = '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible). Vérifiez-le avant usage.';
-            openResult(cands[0], 'TEXTE');
+            saveHistory(best.v, 'TEXTE');
+            pendingNote = best.note || '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible). Vérifiez-le avant usage.';
+            openResult(best.v, 'TEXTE');
           } else {
             statusEl.className = 'hint err';
             statusEl.textContent = 'Aucun code détecté et aucun numéro lisible à côté. Rapprochez-vous du code ET du texte imprimé, photo nette et bien éclairée.';
@@ -1341,23 +1679,41 @@
               if (chkCi && chkCi.ok) { pick = codes[ci]; break; }
             }
             foundCode(pick.rawValue, '' + pick.format);
-          } else if (window.ZXing) {
-            /* le premier moteur n'a rien vu : on retente en zoomant sur le centre */
-            var rz = zxDecodeElement(img);
-            if (rz) foundCode(rz.text, rz.format);
-            else noCode();
           } else {
-            noCode();
+            /* rien en brut : on retente BarcodeDetector sur l'image filtrée (couleurs gommées) */
+            var fcv = null;
+            try { fcv = colorFilterCanvas(img, 'white'); } catch (ef) { fcv = null; }
+            if (fcv) {
+              bd.detect(fcv).then(function (codes2) {
+                if (codes2 && codes2.length > 0) {
+                  foundCode(codes2[0].rawValue, '' + codes2[0].format);
+                } else if (window.ZXing) {
+                  var rz = zxDecodeElement(img, true);
+                  if (rz) foundCode(rz.text, rz.format);
+                  else noCode();
+                } else { noCode(); }
+              }).catch(function () {
+                if (window.ZXing) {
+                  var rz2 = zxDecodeElement(img, true);
+                  if (rz2) foundCode(rz2.text, rz2.format);
+                  else noCode();
+                } else noCode();
+              });
+            } else if (window.ZXing) {
+              var rz3 = zxDecodeElement(img, true);
+              if (rz3) foundCode(rz3.text, rz3.format);
+              else noCode();
+            } else { noCode(); }
           }
         }).catch(function () {
           if (window.ZXing) {
-            var rz2 = zxDecodeElement(img);
+            var rz2 = zxDecodeElement(img, true);
             if (rz2) foundCode(rz2.text, rz2.format);
             else noCode();
           } else noCode();
         });
       } else if (window.ZXing) {
-        var r = zxDecodeElement(img);
+        var r = zxDecodeElement(img, true);
         if (r) foundCode(r.text, r.format);
         else noCode();
       } else {
@@ -1372,12 +1728,15 @@
     img.src = url;
   });
 
-  tabQr.addEventListener('click', function () { mode = 'qr'; tabQr.classList.add('active'); tabBc.classList.remove('active'); renderOutput(); saveState(); });
-  tabBc.addEventListener('click', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); renderOutput(); saveState(); });
-  bcFormat.addEventListener('change', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); renderOutput(); saveState(); });
+  tabQr.addEventListener('click', function () { mode = 'qr'; tabQr.classList.add('active'); tabBc.classList.remove('active'); tabDm.classList.remove('active'); renderOutput(); saveState(); });
+  tabBc.addEventListener('click', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); tabDm.classList.remove('active'); renderOutput(); saveState(); });
+  tabDm.addEventListener('click', function () { mode = 'dm'; tabDm.classList.add('active'); tabQr.classList.remove('active'); tabBc.classList.remove('active'); renderOutput(); saveState(); });
+  bcFormat.addEventListener('change', function () { mode = 'bc'; tabBc.classList.add('active'); tabQr.classList.remove('active'); tabDm.classList.remove('active'); renderOutput(); saveState(); });
   applyBtn.addEventListener('click', function () {
     var v = editVal.value.trim();
     if (!v) return;
+    var cw = completeWildcard(v);
+    if (cw) { v = cw.value; editVal.value = v; }
     lastResult = v; valEl.textContent = v; saveHistory(v, 'MANUEL'); renderOutput();
   });
   editVal.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyBtn.click(); });
@@ -1388,24 +1747,29 @@
   var genInput = document.getElementById('genInput');
   var genQrBtn = document.getElementById('genQrBtn');
   var genBcBtn = document.getElementById('genBcBtn');
-  function generateFromText(bcMode) {
+  var genDmBtn = document.getElementById('genDmBtn');
+  function generateFromText(genMode) {
     var v = genInput.value.trim();
     if (!v) { genInput.focus(); return; }
-    if (bcMode) {
+    if (genMode === 'bc') {
       mode = 'bc'; bcFormat.value = genFormat.value;
-      tabBc.classList.add('active'); tabQr.classList.remove('active');
+      tabBc.classList.add('active'); tabQr.classList.remove('active'); tabDm.classList.remove('active');
+    } else if (genMode === 'dm') {
+      mode = 'dm';
+      tabDm.classList.add('active'); tabQr.classList.remove('active'); tabBc.classList.remove('active');
     } else {
       mode = 'qr';
-      tabQr.classList.add('active'); tabBc.classList.remove('active');
+      tabQr.classList.add('active'); tabBc.classList.remove('active'); tabDm.classList.remove('active');
     }
     lastResult = v; valEl.textContent = v; editVal.value = v;
-    saveHistory(v, bcMode ? genFormat.value : 'QR');
+    saveHistory(v, genMode === 'bc' ? genFormat.value : (genMode === 'dm' ? 'DM' : 'QR'));
     resultEl.style.display = 'block';
     resultEl.scrollIntoView({ behavior: 'smooth' });
     renderOutput(); saveState();
   }
-  genQrBtn.addEventListener('click', function () { generateFromText(false); });
-  genBcBtn.addEventListener('click', function () { generateFromText(true); });
+  genQrBtn.addEventListener('click', function () { generateFromText('qr'); });
+  genBcBtn.addEventListener('click', function () { generateFromText('bc'); });
+  genDmBtn.addEventListener('click', function () { generateFromText('dm'); });
   genInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') genQrBtn.click(); });
 
   /* ===== BOUTON EFFACER : supprime le code affiché ET le texte.
