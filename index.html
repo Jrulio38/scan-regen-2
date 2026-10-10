@@ -300,11 +300,22 @@
      Exemples reconnus : 1A 123 456 789 0, RR123456789FR, 5901234123457, 8H KLMN 12345 */
   function ocrCandidates(text) {
     if (!text) return [];
+    /* symboles acceptés dans les numéros imprimés : @ # ? & ® % £ π ∆ ✓ [ ] etc. */
+    var SYM = '#?&@%£®✓[]§$€π∆*=+/:.-';
+    var SYMRE = /[#?&@%£®✓\[\]§$€π∆*+=:/.\-]/;
     var t = text.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ');
     var seen = {}, out = [];
     function push(v) {
-      if (v && v.replace(/\D/g, '').length >= 7 && !seen[v]) { seen[v] = 1; out.push(v); }
+      v = String(v || '').trim();
+      var alnumLen = v.replace(/[^A-Z0-9]/g, '').length;
+      if (v && !seen[v] && (v.replace(/\D/g, '').length >= 7 || (alnumLen >= 6 && SYMRE.test(v)))) { seen[v] = 1; out.push(v); }
     }
+    /* 0) morceaux contenant des symboles : conservés tels quels (Code 128 sait les encoder) */
+    var SYMESC = SYM.replace(/[.\-\[\]\^$*+?(){}|]/g, '\\$&');
+    var ts = text.toUpperCase().replace(new RegExp('[^A-Z0-9' + SYMESC + ' ]', 'g'), ' ').replace(/\s+/g, ' ');
+    ts.split(' ').forEach(function (tok) {
+      if (tok.length >= 6 && SYMRE.test(tok) && tok.replace(/[^A-Z0-9]/g, '').length >= 3) push(tok);
+    });
     /* 1) formats postaux : 2 lettres + 9 chiffres (+ 2 lettres), ex. RR123456789FR */
     var postal = t.match(/(^|[^A-Z])([A-Z]{2}\s?\d{3}\s?\d{3}\s?\d{3}(\s?[A-Z]{2})?)(?![A-Z0-9])/g) || [];
     postal.forEach(function (m) { push(m.replace(/[^A-Z0-9]/g, '')); });
@@ -327,6 +338,33 @@
     return final.slice(0, 6);
   }
 
+  /* Type de code le plus probable pour un numéro lu en texte imprimé :
+     priorité au type ciblé dans « Type de code à lire », sinon on déduit du
+     numéro (13 chiffres → EAN-13, 14 → ITF-14, 12 → UPC, 8 → EAN-8,
+     lettres/symboles ASCII → Code 128, symboles spéciaux π ∆ £ ® ✓ → QR Code).
+     Le type reste modifiable dans la liste de la carte résultat. */
+  function ocrGuessFormat(value) {
+    var v = String(value || '').replace(/\s+/g, '');
+    if (typeof scanFmt === 'string' && scanFmt && scanFmt !== 'auto') {
+      if (scanFmt === 'QR_CODE') return 'QR_CODE';
+      if (scanFmt === 'DATA_MATRIX') return 'DATA_MATRIX';
+      var m = FORMAT_MAP[scanFmt];
+      if (m) return m;
+    }
+    var d = v.replace(/\D/g, '');
+    if (v === d) {
+      if (d.length === 13) return 'EAN13';
+      if (d.length === 14) return 'ITF14';
+      if (d.length === 12) return 'UPC';
+      if (d.length === 8) return 'EAN8';
+      return 'CODE128';
+    }
+    /* Code 128 encode toutes les lettres, chiffres et symboles ASCII ;
+       pour les symboles non ASCII (π ∆ £ ® ✓ …), seul le QR Code convient */
+    if (/^[\x20-\x7E]+$/.test(v)) return 'CODE128';
+    return 'QR_CODE';
+  }
+
   /* Concordance entre le contenu du code lu et le texte imprimé à côté :
      renvoie 'ok' | 'ecart' | 'inconnu' (texte illisible ou absent) */
   function ocrConcordance(codeValue, ocrText) {
@@ -337,6 +375,7 @@
     var digits = function (s) { return String(s || '').replace(/\D/g, ''); };
     var target = norm(codeValue), tdig = digits(codeValue);
     for (var i = 0; i < cands.length; i++) {
+      if (String(cands[i]).toUpperCase() === String(codeValue).toUpperCase()) return 'ok';
       var c = norm(cands[i]);
       if (c === target) return 'ok';
       if (digits(c).length >= 10 && tdig.length >= 10 && digits(c).indexOf(tdig) !== -1) return 'ok';
@@ -840,7 +879,7 @@
     var best = ocrBestCandidate(cands);
     saveHistory(best.v, 'TEXTE');
     pendingNote = best.note || '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible pour la caméra). Vérifiez-le avant usage.';
-    openResult(best.v, 'TEXTE');
+    openResult(best.v, ocrGuessFormat(best.v));
   });
 
   function tick() {
@@ -991,7 +1030,8 @@
     var cw = completeWildcard(value);
     if (cw) { value = cw.value; pendingNote = cw.note; }
     var mapped = (format === 'DATA_MATRIX' || format === 'data_matrix') ? 'DATA_MATRIX'
-      : (FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null));
+      : (FORMAT_MAP[format] || (format === 'QR_CODE' || format === 'qr_code' ? 'QR_CODE' : null)
+        || (['EAN13', 'EAN8', 'UPC', 'ITF14', 'ITF', 'CODE39', 'CODE128'].indexOf(format) !== -1 ? format : null));
     var digits0 = value.replace(/\D/g, '');
     if (!mapped && digits0.length >= 7 && digits0.length <= 14 && digits0 === value) {
       mapped = digits0.length <= 8 ? 'EAN8' : (digits0.length === 14 ? 'ITF14' : 'EAN13');
@@ -1652,7 +1692,7 @@
         }
         finish(true, 'Code illisible — lecture du numéro écrit à côté…');
         statusEl.className = 'hint';
-        statusEl.textContent = '🔎 Code illisible — lecture des chiffres et lettres écrits à côté…';
+        statusEl.textContent = '🔎 Code illisible — lecture des chiffres, lettres et symboles écrits à côté…';
         ocrReadText(img).then(function (txt) {
           var cands = ocrCandidates(txt);
           if (cands.length) {
@@ -1660,7 +1700,7 @@
             statusEl.textContent = '✅ Code illisible, mais le numéro écrit à côté a été lu.';
             saveHistory(best.v, 'TEXTE');
             pendingNote = best.note || '🔎 Numéro lu sur le texte imprimé à côté du code (code illisible). Vérifiez-le avant usage.';
-            openResult(best.v, 'TEXTE');
+            openResult(best.v, ocrGuessFormat(best.v));
           } else {
             statusEl.className = 'hint err';
             statusEl.textContent = 'Aucun code détecté et aucun numéro lisible à côté. Rapprochez-vous du code ET du texte imprimé, photo nette et bien éclairée.';
