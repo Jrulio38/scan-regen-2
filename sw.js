@@ -1,4 +1,4 @@
-var CACHE = 'scan-regen-2-v32';
+var CACHE = 'scan-regen-2-v33';
 var ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(ASSETS); }).then(function () { return self.skipWaiting(); }));
